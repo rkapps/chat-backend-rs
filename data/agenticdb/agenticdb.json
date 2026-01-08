@@ -1,0 +1,9 @@
+{
+  "name": "agenticdb",
+  "file_path": "data/agenticdb",
+  "collections": {
+    "chats": {
+      "name": "chats"
+    }
+  }
+}

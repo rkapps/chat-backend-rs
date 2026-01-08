@@ -1,35 +1,41 @@
-use agentic_rs::{handlers::{
-    chat::{chat_completion_handler, chat_create_handler, get_chat_by_id_handler, get_chats_handler},
-    llm::llm_providers_handler,
-}, storage::{self, load_chatmap_from_disk}};
+use std::sync::Arc;
+
+use agentic_rs::{agents::{handlers::llm_providers_handler, service::AgentService}, chat::{handlers::{chat_completion_handler, create_chat_handler, get_all_chats_handler, get_chat_by_id_handler}, service::ChatService, storage::ChatStorage}, state::AppState};
 use axum::{
-    Router, http::{HeaderValue, Method}, routing::{get, post}
+    Router,
+    http::{HeaderValue, Method},
+    routing::{get, post},
 };
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::Mutex};
 use tower_http::cors::CorsLayer;
 use tracing::debug;
 
 #[tokio::main]
 
 async fn main() {
+
     agentic_rs::logger::set_logger();
 
-    //load chats 
-    load_chatmap_from_disk().await.expect("Error loading chats from disp");
+    // initialize storage and the services
+    let storage = Mutex::new(ChatStorage::new("agenticdb".to_string(), "data/agenticdb".to_string(), "chats".to_string()));
+    let chat_service: Arc<ChatService> = Arc::new(ChatService::new(Arc::new(storage)));
+    let agent_service = Arc::new(AgentService::new());
 
     let cors = CorsLayer::new()
-    .allow_origin("http://localhost:4200".parse::<HeaderValue>().unwrap())
+        .allow_origin("http://localhost:4200".parse::<HeaderValue>().unwrap())
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([axum::http::header::CONTENT_TYPE]);
+    let app_state = AppState{chat_service, agent_service};
 
-        
     let app = Router::new()
         .route("/llm/providers", get(llm_providers_handler))
-        .route("/chats", get(get_chats_handler))
+        .route("/chats", get(get_all_chats_handler))
         .route("/chats/{id}", get(get_chat_by_id_handler))
-        .route("/chats/create", post(chat_create_handler))
+        .route("/chats/create", post(create_chat_handler))
         .route("/chats/completion", post(chat_completion_handler))
-        .layer(cors);
+        .layer(cors)
+        .with_state(app_state) // Shared state
+        ;
 
     let listener = TcpListener::bind("127.0.0.1:3001").await.unwrap();
     println!("🚀 Listening on http://127.0.0.1:3001");
@@ -39,9 +45,8 @@ async fn main() {
         .await
         .unwrap();
 
-    debug!("Saving maps to disk...");
-    storage::save_chatmap_to_disk().await;
     debug!("Shutdown complete.");
+
 
 }
 
