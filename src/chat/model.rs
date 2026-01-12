@@ -1,4 +1,4 @@
-use agentic_core_rs::capabilities::completion::{message::Message, response};
+use agentic_core_rs::capabilities::completion::message::Message;
 use serde::{Deserialize, Serialize};
 use storage_core::core::RepoModel;
 use uuid::Uuid;
