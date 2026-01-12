@@ -1,25 +1,28 @@
-use std::{fmt::Display, sync::Arc};
-
+use agentic_core_rs::{
+    agent::service::AgentService,
+};
+use anyhow::Result;
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
+    response::{IntoResponse, Sse, sse::Event},
 };
+use futures::StreamExt;
+use std::{convert::Infallible, fmt::Display, sync::Arc};
 use tracing::debug;
 
-use crate::{
-    agents::service::AgentService,
-    chat::{
-        dto::{ChatErrorResponse, ChatRequest, ChatResponse},
-        model::{Chat, ChatConfig},
-        service::ChatService,
-    },
+use crate::chat::{
+    dto::{ChatErrorResponse, ChatRequest, ChatResponse},
+    model::{Chat, ChatConfig},
+    service::ChatService,
 };
 
 pub async fn create_chat_handler(
     State(service): State<Arc<ChatService>>,
     Json(payload): Json<ChatConfig>,
 ) -> Result<Json<Chat>, (StatusCode, Json<ChatErrorResponse>)> {
+    debug!("config: {:?}", payload);
     let chat = service
         .create_chat(payload)
         .await
@@ -54,12 +57,75 @@ pub async fn chat_completion_handler(
     Json(payload): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, Json<ChatErrorResponse>)> {
     //get chat
+    debug!("started chat_completion_streaming_handler {:?}", payload);
 
     let response = service
-        .chat_completion(payload, *agent_service)
+        .chat_completion(payload, agent_service)
         .await
-        .map_err(|e| to_chat_error_response("Chat completion error", e))?;
+        .map_err(|e| to_chat_error_response("Chat completion error111", e))?;
     Ok(Json(response))
+}
+
+pub async fn chat_completion_streaming_handler(
+    State(chat_service): State<Arc<ChatService>>,
+    State(agent_service): State<Arc<AgentService>>,
+    Json(payload): Json<ChatRequest>,
+    // ) -> Sse<impl Stream<Item = Result<Event, anyhow::Error>>> {
+    //get chat.a
+) -> impl IntoResponse {
+    debug!("started chat_completion_streaming_handler");
+
+    let stream = match chat_service
+        .chat_completion_streaming(payload.clone(), agent_service)
+        .await
+    {
+        Ok(stream) => stream,
+        Err(e) => {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let mut response_chunk = String::new();
+    let request = payload.clone();
+
+    // .map_err(|e| to_chat_error_response("Chat completion error", e));
+    let event_stream = stream.map(move |chunk_result| {
+        match chunk_result {
+            Ok(chunk) => {
+                // Convert your ChatResponseChunk to SSE Event
+                debug!("chunk: {:?}", chunk);
+
+                match serde_json::to_string(&chunk) {
+                    Ok(c) => {
+                        response_chunk.push_str(&chunk.content);
+                        if chunk.is_final {
+                            debug!("request: {:?}", request);
+                            debug!("reached final: {:?}", response_chunk);
+                        }
+                        // if chunk.is_final {
+                        //     debug!("request: {}", request);
+                        //     debug!("final response: {}", response_chunk);
+                        // }
+                        Ok::<Event, Infallible>(
+                            Event::default()
+                                .data(c) // Serialize to JSON string
+                                .event("message"),
+                        )
+                    }
+                    Err(e) => Ok::<Event, Infallible>(
+                        Event::default().data(format!("{}", e)).event("error"),
+                    ),
+                }
+            }
+            Err(e) => {
+                // Send error as SSE event
+                debug!("error: {:?}", e);
+                Ok::<Event, Infallible>(Event::default().data(format!("{}", e)).event("error"))
+            }
+        }
+    });
+
+    Sse::new(event_stream).into_response()
 }
 
 fn to_chat_error_response(

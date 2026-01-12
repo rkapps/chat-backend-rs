@@ -16,14 +16,8 @@ impl ChatStorage {
     }
 
     pub async fn create_chat(&mut self, chat: Chat) -> Result<()> {
-        // let repo: &mut dyn Repository<String, Chat> = self
-        //     .db
-        //     .collection(self.collection_name.clone())?;
-        // .map_err(|e| anyhow::anyhow!(format!("Error creating chat: {:?}", e)))?;
         let repo = self.db.collection(self.collection_name.clone())?;
         repo.insert(chat).await?;
-        // .await
-        // .map_err(|e| anyhow::anyhow!(format!("Error creating chat: {:?}", e)))?;
         Ok(())
     }
 
@@ -51,8 +45,6 @@ impl ChatStorage {
     pub async fn update_chat(&mut self, chat: Chat) -> Result<()> {
         let repo = self.db.collection(self.collection_name.clone())?;
         repo.update(chat).await?;
-        // .await
-        // .map_err(|e| anyhow::anyhow!(format!("Error creating chat: {:?}", e)))?;
         Ok(())
     }
     

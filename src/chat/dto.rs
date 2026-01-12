@@ -7,7 +7,7 @@ pub struct ChatErrorResponse {
 }
 
 
-#[derive(Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ChatRequest {
     pub id: String,
     pub prompt: String,

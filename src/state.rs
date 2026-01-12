@@ -1,7 +1,8 @@
 use std::sync::Arc;
+use agentic_core_rs::agent::service::AgentService;
 use axum::extract::FromRef;
 
-use crate::{agents::service::AgentService, chat::service::ChatService};
+use crate::{chat::service::ChatService};
 
 #[derive(Clone)]
 pub struct AppState {

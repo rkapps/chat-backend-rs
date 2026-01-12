@@ -1,17 +1,18 @@
 use std::sync::Arc;
 
-use crate::{
-    agents::service::AgentService,
-    chat::{
-        dto::{ChatRequest, ChatResponse},
-        model::{Chat, ChatConfig},
-        storage::ChatStorage,
-    },
+use crate::chat::{
+    dto::{ChatRequest, ChatResponse},
+    model::{Chat, ChatConfig},
+    storage::ChatStorage,
 };
 use agentic_core_rs::{
+    agent::{completion::Agent, service::AgentService},
     capabilities::{
-        completion::CompletionRequest,
-        messages::{Message, MessageRole},
+        client::completion::CompletionStreamResponse,
+        completion::{
+            message::{Message, MessageRole},
+            request::CompletionRequest,
+        },
     },
 };
 use anyhow::Result;
@@ -70,41 +71,24 @@ impl ChatService {
     pub async fn chat_completion(
         &self,
         request: ChatRequest,
-        agent_service: AgentService,
+        agent_service: Arc<AgentService>,
     ) -> Result<ChatResponse> {
 
-
-        let mut storage_guard = self.storage.lock().await;
-        let chat = storage_guard
+        let mut storage_guard: tokio::sync::MutexGuard<'_, ChatStorage> = self.storage.lock().await;
+        let mut chat = storage_guard
             .get_chat(request.clone().id)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        let agent = agent_service
-            .clone()
-            .get_chat_agent(chat.clone().llm, chat.clone().model)
-            .map_err(|_e| {
-                anyhow::anyhow!(format!(
-                    "Agent error for {:?}/{:?}",
-                    chat.clone().llm,
-                    chat.clone().model
-                ))
-            })?;
+        let agent = self.clone().get_chat_agent(&chat, agent_service)?;
 
         let id = chat.clone().id;
-        let mut nchat = chat.clone();
-        // add the chat request to the chat messages.
-        let cmessage = Message::create_user_message(&request.prompt, None);
-        nchat.messages.push(cmessage);
+        // let cmessage = Message::create_user_message(&request.prompt, None);
+        // chat.messages.push(cmessage);
+        chat.update_user_message(request.prompt);
 
-        //Create the completion request
-        let crequest = CompletionRequest {
-            model: agent.config.client.model().to_string(),
-            system: nchat.system.clone(),
-            messages: nchat.messages.clone(),
-            max_tokens: agent.max_tokens(),
-            temperature: agent.temperature(),
-        };
+        let crequest =
+            self.create_completion_request(chat.clone(), agent.temperature, agent.max_tokens);
 
         // On error, Send an error response
         let cresponse = agent
@@ -112,14 +96,21 @@ impl ChatService {
             .await
             .map_err(|e| anyhow::anyhow!(format!("Completion Response error {:?}", e)))?;
 
+        // chat.messages.push(cmessage);
+
         //Create the chat response message and add it the chat.
-        let content = cresponse.content;
-        let response_id = Some(cresponse.id);
-        let message = Message::create_assistant_message(&content, response_id.clone());
-        nchat.messages.push(message);
+        let response = cresponse.clone();
+        // let response_id = Some(cresponse.id.clone());
+        // let message = Message::create_assistant_message(&content, response_id.clone());
+        // chat.messages.push(message);
+        chat.update_assistant_message(cresponse.content, cresponse.id);
+        // let mut messages = Vec::new();
+        // messages.push(cmessage);
+        // messages.push(message);
+        // self.update_chat_messages(chat, messages).await?;
 
         storage_guard
-            .update_chat(nchat)
+            .update_chat(chat)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -127,11 +118,76 @@ impl ChatService {
         let response = ChatResponse {
             id: id,
             role: MessageRole::Assistant.as_str().to_string(),
-            content: Some(content.clone()),
-            response_id: response_id,
+            content: Some(response.content),
+            response_id: Some(response.id),
         };
         debug!("Chat Request: {:#?}", response);
 
         Ok(response)
+    }
+
+    pub async fn chat_completion_streaming(
+        &self,
+        request: ChatRequest,
+        agent_service: Arc<AgentService>,
+    ) -> Result<CompletionStreamResponse> {
+        // let crequest = self.create_completion_request(request, agent_service);
+        debug!("Chat request: {:?}", request);
+
+        let mut storage_guard: tokio::sync::MutexGuard<'_, ChatStorage> = self.storage.lock().await;
+        let mut chat = storage_guard
+            .get_chat(request.clone().id)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        let agent = self.clone().get_chat_agent(&chat, agent_service)?;
+
+        // let cmessage = Message::create_user_message(&request.prompt, None);
+        // chat.messages.push(cmessage);
+        chat.update_user_message(request.prompt);
+
+        // let crequest = CompletionRequest {
+        //     model: chat.model,
+        //     system: chat.system,
+        //     messages: chat.messages,
+        //     temperature: agent.temperature,
+        //     max_tokens: agent.max_tokens,
+        //     stream: chat.stream,
+        // };
+        let crequest =
+            self.create_completion_request(chat, agent.temperature, agent.max_tokens);
+        debug!("Completion request: {:?}", crequest);
+        debug!("Chat request1111: {:?}", request.id);
+        agent.complete_with_stream(crequest).await
+
+
+    }
+
+    fn get_chat_agent(self, chat: &Chat, agent_service: Arc<AgentService>) -> Result<Arc<Agent>> {
+        agent_service
+            .clone()
+            .get_chat_agent(&chat.llm)
+            .map_err(|_e| {
+                anyhow::anyhow!(format!("Agent error for {:?}/{:?}", chat.llm, chat.model))
+            })
+    }
+
+    fn create_completion_request(
+        &self,
+        chat: Chat,
+        temperature: f32,
+        max_tokens: i32,
+    ) -> CompletionRequest {
+        //Create the completion request
+        let crequest = CompletionRequest {
+            model: chat.model,
+            system: chat.system,
+            messages: chat.messages,
+            temperature: temperature,
+            max_tokens: max_tokens,
+            stream: chat.stream,
+        };
+
+        crequest
     }
 }
