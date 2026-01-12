@@ -10,18 +10,19 @@ tracing-subscriber = { version= "0.3.18", features = ["env-filter"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0.228", features = ["serde_derive"] }
 serde_json = "1.0.148"
-agentic-core-rs = { version = "0.1.0", path = "../agentic-core-rs" }
 axum = { version = "0.8.8", features = ["macros"] }
 uuid = { version = "1.0", features = ["v4"] }
 tower-http = {version = "0.6.8", features = ["cors"]}
 async-trait = "0.1.89"
-
-storage-core = { path = "../storage-core-rs" }
 reqwest = { version = "0.12.28", features = ["json", "stream", "multipart"]}
 bytes = "1.11.0"
 futures = "0.3"
 futures-util = "0.3.31"
 
+storage-core = { path = "../storage-core-rs" }
+agentic-core = { path = "../agentic-core-rs" }
+
 
 [patch.crates-io]
-agentic-core-rs = { path = "../agentic-core-rs" }
+agentic-core = { path = "../agentic-core-rs" }
+
