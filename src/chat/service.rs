@@ -5,8 +5,8 @@ use crate::chat::{
     model::{Chat, ChatConfig},
     storage::ChatStorage,
 };
-use agentic_core_rs::{
-    agent::{completion::Agent, service::AgentService},
+use agentic_core::{
+    agent::service::AgentService,
     capabilities::{
         client::completion::CompletionStreamResponse,
         completion::{message::MessageRole, request::CompletionRequest},
@@ -76,7 +76,8 @@ impl ChatService {
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        let agent = self.clone().get_chat_agent(&chat, agent_service)?;
+        // let agent = self.clone().get_chat_agent(&chat, agent_service)?;
+        let agent = agent_service.get_chat_agent(&chat.llm)?;
 
         let id = chat.clone().id;
         chat.update_user_message(request.prompt);
@@ -124,7 +125,9 @@ impl ChatService {
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        let agent = self.clone().get_chat_agent(&chat, agent_service)?;
+        // let agent = self.clone().get_chat_agent(&chat, agent_service)?;
+        let agent = agent_service.get_chat_agent(&chat.llm)?;
+
         chat.update_user_message(request.prompt);
 
         let crequest = self.create_completion_request(chat, agent.temperature, agent.max_tokens);
@@ -147,14 +150,14 @@ impl ChatService {
         Ok(())
     }
 
-    fn get_chat_agent(self, chat: &Chat, agent_service: Arc<AgentService>) -> Result<Arc<Agent>> {
-        agent_service
-            .clone()
-            .get_chat_agent(&chat.llm)
-            .map_err(|_e| {
-                anyhow::anyhow!(format!("Agent error for {:?}/{:?}", chat.llm, chat.model))
-            })
-    }
+    // fn get_chat_agent(self, chat: &Chat, agent_service: Arc<AgentService>) -> Result<Arc<Agent>> {
+    //     agent_service
+    //         .clone()
+    //         .get_chat_agent(&chat.llm)
+    //         .map_err(|_e| {
+    //             anyhow::anyhow!(format!("Agent error for {:?}/{:?}", chat.llm, chat.model))
+    //         })
+    // }
 
     fn create_completion_request(
         &self,

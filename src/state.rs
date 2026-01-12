@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use agentic_core_rs::agent::service::AgentService;
+use agentic_core::agent::service::AgentService;
 use axum::extract::FromRef;
 
 use crate::{chat::service::ChatService};

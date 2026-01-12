@@ -1,4 +1,4 @@
-use agentic_core_rs::agent::service::AgentService;
+use agentic_core::agent::service::AgentService;
 use anyhow::Result;
 use axum::{
     Json,

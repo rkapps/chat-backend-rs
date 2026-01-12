@@ -1,6 +1,5 @@
 use std::sync::Arc;
-
-use agentic_core_rs::agent::service::{AgentService, LlmProvider};
+use agentic_core::agent::service::{AgentService, LlmProvider};
 use anyhow::Result;
 use axum::{Json, extract::State};
 

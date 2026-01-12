@@ -1,4 +1,4 @@
-use agentic_core_rs::{
+use agentic_core::{
     agent::service::AgentService,
     providers::{anthropic, gemini, openai},
 };
