@@ -7,7 +7,7 @@ use agentic_rs::{
     chat::{
         handlers::{
             chat_completion_handler, chat_completion_streaming_handler, create_chat_handler,
-            get_all_chats_handler, get_chat_by_id_handler,
+            get_all_chats_handler, get_chat_by_id_handler, save_streaming_message_handler,
         },
         service::ChatService,
         storage::ChatStorage,
@@ -70,6 +70,7 @@ async fn main() -> Result<()> {
         .route("/chats/create", post(create_chat_handler))
         .route("/chats/completion", post(chat_completion_handler))
         .route("/chats/completion_streaming", post(chat_completion_streaming_handler))
+        .route("/chats/save_streaming_message", post(save_streaming_message_handler))
         .layer(cors)
         .with_state(app_state) // Shared state
         ;

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::chat::{
-    dto::{ChatRequest, ChatResponse},
+    dto::{ChatRequest, ChatResponse, ChatStreamingMessage},
     model::{Chat, ChatConfig},
     storage::ChatStorage,
 };
@@ -9,10 +9,7 @@ use agentic_core_rs::{
     agent::{completion::Agent, service::AgentService},
     capabilities::{
         client::completion::CompletionStreamResponse,
-        completion::{
-            message::{Message, MessageRole},
-            request::CompletionRequest,
-        },
+        completion::{message::MessageRole, request::CompletionRequest},
     },
 };
 use anyhow::Result;
@@ -73,7 +70,6 @@ impl ChatService {
         request: ChatRequest,
         agent_service: Arc<AgentService>,
     ) -> Result<ChatResponse> {
-
         let mut storage_guard: tokio::sync::MutexGuard<'_, ChatStorage> = self.storage.lock().await;
         let mut chat = storage_guard
             .get_chat(request.clone().id)
@@ -83,8 +79,6 @@ impl ChatService {
         let agent = self.clone().get_chat_agent(&chat, agent_service)?;
 
         let id = chat.clone().id;
-        // let cmessage = Message::create_user_message(&request.prompt, None);
-        // chat.messages.push(cmessage);
         chat.update_user_message(request.prompt);
 
         let crequest =
@@ -96,18 +90,9 @@ impl ChatService {
             .await
             .map_err(|e| anyhow::anyhow!(format!("Completion Response error {:?}", e)))?;
 
-        // chat.messages.push(cmessage);
-
         //Create the chat response message and add it the chat.
         let response = cresponse.clone();
-        // let response_id = Some(cresponse.id.clone());
-        // let message = Message::create_assistant_message(&content, response_id.clone());
-        // chat.messages.push(message);
-        chat.update_assistant_message(cresponse.content, cresponse.id);
-        // let mut messages = Vec::new();
-        // messages.push(cmessage);
-        // messages.push(message);
-        // self.update_chat_messages(chat, messages).await?;
+        chat.update_assistant_message(cresponse.content, cresponse.response_id);
 
         storage_guard
             .update_chat(chat)
@@ -119,7 +104,7 @@ impl ChatService {
             id: id,
             role: MessageRole::Assistant.as_str().to_string(),
             content: Some(response.content),
-            response_id: Some(response.id),
+            response_id: Some(response.response_id),
         };
         debug!("Chat Request: {:#?}", response);
 
@@ -131,7 +116,6 @@ impl ChatService {
         request: ChatRequest,
         agent_service: Arc<AgentService>,
     ) -> Result<CompletionStreamResponse> {
-        // let crequest = self.create_completion_request(request, agent_service);
         debug!("Chat request: {:?}", request);
 
         let mut storage_guard: tokio::sync::MutexGuard<'_, ChatStorage> = self.storage.lock().await;
@@ -141,26 +125,26 @@ impl ChatService {
             .map_err(|e| anyhow::anyhow!(e))?;
 
         let agent = self.clone().get_chat_agent(&chat, agent_service)?;
-
-        // let cmessage = Message::create_user_message(&request.prompt, None);
-        // chat.messages.push(cmessage);
         chat.update_user_message(request.prompt);
 
-        // let crequest = CompletionRequest {
-        //     model: chat.model,
-        //     system: chat.system,
-        //     messages: chat.messages,
-        //     temperature: agent.temperature,
-        //     max_tokens: agent.max_tokens,
-        //     stream: chat.stream,
-        // };
-        let crequest =
-            self.create_completion_request(chat, agent.temperature, agent.max_tokens);
-        debug!("Completion request: {:?}", crequest);
-        debug!("Chat request1111: {:?}", request.id);
+        let crequest = self.create_completion_request(chat, agent.temperature, agent.max_tokens);
         agent.complete_with_stream(crequest).await
+    }
 
+    pub async fn save_streaming_message(&self, request: ChatStreamingMessage) -> Result<()> {
+        let mut storage_guard: tokio::sync::MutexGuard<'_, ChatStorage> = self.storage.lock().await;
+        let mut chat = storage_guard
+            .get_chat(request.clone().id)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+        chat.update_user_message(request.user_content);
+        chat.update_assistant_message(request.assistant_content, request.response_id);
+        storage_guard
+            .update_chat(chat)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
 
+        Ok(())
     }
 
     fn get_chat_agent(self, chat: &Chat, agent_service: Arc<AgentService>) -> Result<Arc<Agent>> {

@@ -1,6 +1,4 @@
-use agentic_core_rs::{
-    agent::service::AgentService,
-};
+use agentic_core_rs::agent::service::AgentService;
 use anyhow::Result;
 use axum::{
     Json,
@@ -13,17 +11,17 @@ use std::{convert::Infallible, fmt::Display, sync::Arc};
 use tracing::debug;
 
 use crate::chat::{
-    dto::{ChatErrorResponse, ChatRequest, ChatResponse},
+    dto::{ChatErrorResponse, ChatRequest, ChatResponse, ChatStreamingMessage},
     model::{Chat, ChatConfig},
     service::ChatService,
 };
 
 pub async fn create_chat_handler(
-    State(service): State<Arc<ChatService>>,
+    State(chat_service): State<Arc<ChatService>>,
     Json(payload): Json<ChatConfig>,
 ) -> Result<Json<Chat>, (StatusCode, Json<ChatErrorResponse>)> {
     debug!("config: {:?}", payload);
-    let chat = service
+    let chat = chat_service
         .create_chat(payload)
         .await
         .map_err(|e| to_chat_error_response("Chat Error", e))?;
@@ -31,9 +29,9 @@ pub async fn create_chat_handler(
 }
 
 pub async fn get_all_chats_handler(
-    State(service): State<Arc<ChatService>>,
+    State(chat_service): State<Arc<ChatService>>,
 ) -> Result<Json<Vec<Chat>>, (StatusCode, Json<ChatErrorResponse>)> {
-    let chats = service
+    let chats = chat_service
         .get_all_chats()
         .await
         .map_err(|e| to_chat_error_response("Chat Error", e))?;
@@ -41,10 +39,10 @@ pub async fn get_all_chats_handler(
 }
 
 pub async fn get_chat_by_id_handler(
-    State(service): State<Arc<ChatService>>,
+    State(chat_service): State<Arc<ChatService>>,
     Path(id): Path<String>,
 ) -> Result<Json<Chat>, (StatusCode, Json<ChatErrorResponse>)> {
-    let chat = service
+    let chat = chat_service
         .get_chat_by_id(id)
         .await
         .map_err(|e| to_chat_error_response("Chat Error", e))?;
@@ -52,17 +50,17 @@ pub async fn get_chat_by_id_handler(
 }
 
 pub async fn chat_completion_handler(
-    State(service): State<Arc<ChatService>>,
+    State(chat_service): State<Arc<ChatService>>,
     State(agent_service): State<Arc<AgentService>>,
     Json(payload): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, Json<ChatErrorResponse>)> {
     //get chat
     debug!("started chat_completion_streaming_handler {:?}", payload);
 
-    let response = service
+    let response = chat_service
         .chat_completion(payload, agent_service)
         .await
-        .map_err(|e| to_chat_error_response("Chat completion error111", e))?;
+        .map_err(|e| to_chat_error_response("Chat completion error", e))?;
     Ok(Json(response))
 }
 
@@ -80,15 +78,11 @@ pub async fn chat_completion_streaming_handler(
         .await
     {
         Ok(stream) => stream,
-        Err(e) => {
+        Err(_) => {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
-    let mut response_chunk = String::new();
-    let request = payload.clone();
-
-    // .map_err(|e| to_chat_error_response("Chat completion error", e));
     let event_stream = stream.map(move |chunk_result| {
         match chunk_result {
             Ok(chunk) => {
@@ -97,15 +91,6 @@ pub async fn chat_completion_streaming_handler(
 
                 match serde_json::to_string(&chunk) {
                     Ok(c) => {
-                        response_chunk.push_str(&chunk.content);
-                        if chunk.is_final {
-                            debug!("request: {:?}", request);
-                            debug!("reached final: {:?}", response_chunk);
-                        }
-                        // if chunk.is_final {
-                        //     debug!("request: {}", request);
-                        //     debug!("final response: {}", response_chunk);
-                        // }
                         Ok::<Event, Infallible>(
                             Event::default()
                                 .data(c) // Serialize to JSON string
@@ -126,6 +111,21 @@ pub async fn chat_completion_streaming_handler(
     });
 
     Sse::new(event_stream).into_response()
+}
+
+pub async fn save_streaming_message_handler(
+    State(chat_service): State<Arc<ChatService>>,
+    Json(payload): Json<ChatStreamingMessage>,
+) -> Result<(), (StatusCode, Json<ChatErrorResponse>)> {
+    //get chat
+    debug!("started chat_completion_streaming_handler {:?}", payload);
+
+    chat_service
+        .save_streaming_message(payload)
+        .await
+        .map_err(|e| to_chat_error_response("Chat save streaming message error", e))?;
+
+    Ok(())
 }
 
 fn to_chat_error_response(
