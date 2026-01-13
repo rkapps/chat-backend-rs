@@ -83,8 +83,6 @@ async fn main() -> Result<()> {
         .await
         .unwrap();
 
-    debug!("Shutdown complete.");
-
     Ok(())
 }
 

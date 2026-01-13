@@ -125,7 +125,6 @@ impl ChatService {
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        // let agent = self.clone().get_chat_agent(&chat, agent_service)?;
         let agent = agent_service.get_chat_agent(&chat.llm)?;
 
         chat.update_user_message(request.prompt);
@@ -150,14 +149,6 @@ impl ChatService {
         Ok(())
     }
 
-    // fn get_chat_agent(self, chat: &Chat, agent_service: Arc<AgentService>) -> Result<Arc<Agent>> {
-    //     agent_service
-    //         .clone()
-    //         .get_chat_agent(&chat.llm)
-    //         .map_err(|_e| {
-    //             anyhow::anyhow!(format!("Agent error for {:?}/{:?}", chat.llm, chat.model))
-    //         })
-    // }
 
     fn create_completion_request(
         &self,
