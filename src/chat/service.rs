@@ -1,110 +1,207 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use crate::chat::{
-    dto::{ChatRequest, ChatResponse, ChatStreamingMessage},
-    model::{Chat, ChatConfig},
-    storage::ChatStorage,
+use crate::{
+    chat::{
+        dto::{ChatRequest, ChatResponse, ChatStreamingMessage},
+        model::{Chat, ChatConfig},
+        storage::ChatStorage,
+    },
 };
 use agentic_core::{
-    agent::service::AgentService,
+    agent::{completion::Agent, service::LlmProvider},
     capabilities::{
         client::completion::CompletionStreamResponse,
-        completion::{message::MessageRole, request::CompletionRequest},
+        completion::{
+            message::Message, response::CompletionResponseContent,
+        },
     },
 };
 use anyhow::Result;
-use tokio::sync::Mutex;
+use storage_core::core::Repository;
 use tracing::debug;
 
-#[derive(Clone)]
+#[derive(Debug)]
 pub struct ChatService {
-    storage: Arc<Mutex<ChatStorage>>,
+    storage:ChatStorage,
+    pub agents: HashMap<String, Arc<Agent>>,
+    pub providers: Vec<LlmProvider>
 }
 
 impl ChatService {
-    pub fn new(storage: Arc<Mutex<ChatStorage>>) -> ChatService {
-        Self { storage }
+    pub fn new(storage: ChatStorage) -> ChatService {
+        Self {
+            storage,
+            agents: HashMap::new(),
+            providers: Vec::new()
+        }
+    }
+
+    pub fn add_llm_provider(&mut self, providers: Vec<LlmProvider>) {
+        self.providers = providers
+    }
+
+    pub fn add_agent(&mut self, agent: Agent) {
+        let key = self.key(&agent.llm, &agent.model);
+        self.agents.insert(key, Arc::new(agent));
+    }
+
+    pub fn get_agent(&self, llm: &str, model: &str) -> Arc<Agent> {
+        let key = self.key(llm, model);
+        self.agents.get(&key).unwrap().clone()
+    }
+
+    fn key(&self, llm: &str, model: &str) -> String {
+        format!("{}:{}", llm, model)
+    }
+
+    pub fn get_llm_providers(&self) -> Vec<LlmProvider> {
+        self.providers.clone()
     }
 
     pub async fn create_chat(&self, config: ChatConfig) -> Result<Chat> {
         let chat = config.validate().map_err(|e| anyhow::anyhow!(e))?;
 
-        // Lock the storage to get mutable access
-        let mut storage_guard = self.storage.lock().await;
-        storage_guard
-            .create_chat(chat.clone())
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+        match self.storage.chats().await {
+            Ok(repo) => {
+                let mut repo = repo.lock().await;
+                let _ = repo.insert(chat.clone()).await;
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Error getting chats: {}", e));
+            }
+        }
+        // // Lock the storage to get mutable access
+        // let mut storage_guard = self.storage.lock().await;
+        // storage_guard
+        //     .create_chat(chat.clone())
+        //     .await
+        //     .map_err(|e| anyhow::anyhow!(e))?;
         Ok(chat)
     }
 
     pub async fn get_all_chats(&self) -> Result<Vec<Chat>> {
-        let mut storage_guard = self.storage.lock().await;
-        let chats = storage_guard
-            .get_all_chats()
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        Ok(chats)
+
+        match self.storage.chats().await {
+            Ok(repo) => {
+                let mut repo = repo.lock().await;
+                repo.find_all().await
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Error getting chats: {}", e));
+            }
+        }
+        // let mut storage_guard = self.storage.lock().await;
+        // let chats = storage_guard
+        //     .get_all_chats()
+        //     .await
+        //     .map_err(|e| anyhow::anyhow!(e))?;
+        // Ok(chats)
     }
 
     pub async fn get_chat_by_id(&self, id: String) -> Result<Chat> {
-        let mut storage_guard = self.storage.lock().await;
-        let chat = storage_guard
-            .get_chat(id.clone())
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        Ok(chat)
+
+        match self.storage.chats().await {
+            Ok(repo) => {
+                let mut repo = repo.lock().await;
+                repo.find_by_id(id).await
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Error getting chats: {}", e));
+            }
+        }
+
+        // let mut storage_guard = self.storage.lock().await;
+        // let chat = storage_guard
+        //     .get_chat(id.clone())
+        //     .await
+        //     .map_err(|e| anyhow::anyhow!(e))?;
+        // Ok(chat)
     }
 
     pub async fn delete_chat(&self, id: String) -> Result<()> {
-        let mut storage_guard = self.storage.lock().await;
-        storage_guard
-            .delete_chat(id)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        Ok(())
+
+        let chat = self.get_chat_by_id(id).await?;
+        match self.storage.chats().await {
+            Ok(repo) => {
+                let mut repo = repo.lock().await;
+                repo.delete(chat).await
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Error getting chats: {}", e));
+            }
+        }        
+        // let mut storage_guard = self.storage.lock().await;
+        // storage_guard
+        //     .delete_chat(id)
+        //     .await
+        //     .map_err(|e| anyhow::anyhow!(e))?;
+        // Ok(())
     }
 
-    pub async fn chat_completion(
-        &self,
-        request: ChatRequest,
-        agent_service: Arc<AgentService>,
-    ) -> Result<ChatResponse> {
-        let mut storage_guard: tokio::sync::MutexGuard<'_, ChatStorage> = self.storage.lock().await;
-        let mut chat = storage_guard
-            .get_chat(request.clone().id)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+    pub async fn update_chat(&self, chat: Chat) -> Result<()> {
 
-        // let agent = self.clone().get_chat_agent(&chat, agent_service)?;
-        let agent = agent_service.get_chat_agent(&chat.llm)?;
+        match self.storage.chats().await {
+            Ok(repo) => {
+                let mut repo = repo.lock().await;
+                repo.update(chat).await
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Error getting chats: {}", e));
+            }
+        }        
+        // let mut storage_guard = self.storage.lock().await;
+        // storage_guard
+        //     .delete_chat(id)
+        //     .await
+        //     .map_err(|e| anyhow::anyhow!(e))?;
+        // Ok(())
+    }
 
+
+    pub async fn chat_completion(&self, request: ChatRequest) -> Result<ChatResponse> {
+
+        let mut chat = self.get_chat_by_id(request.clone().id).await?;
+
+        // let mut storage_guard: tokio::sync::MutexGuard<'_, ChatStorage> = self.storage.lock().await;
+        // let mut chat = storage_guard
+        //     .get_chat(request.clone().id)
+        //     .await
+        //     .map_err(|e| anyhow::anyhow!(e))?;
+
+        let agent = self.get_agent(&chat.llm, &chat.model);
         let id = chat.clone().id;
         chat.update_user_message(request.prompt);
 
-        let crequest =
-            self.create_completion_request(chat.clone(), agent.temperature, agent.max_tokens);
-
+        let messages = self.create_completion_messages(&chat);
         // On error, Send an error response
         let cresponse = agent
-            .complete(crequest)
+            .complete(&chat.system, &messages)
             .await
             .map_err(|e| anyhow::anyhow!(format!("Completion Response error {:?}", e)))?;
 
+        debug!("Completion Response: {:#?}", cresponse);
         //Create the chat response message and add it the chat.
+        let mut rcontent = String::new();
         let response = cresponse.clone();
-        chat.update_assistant_message(cresponse.content, cresponse.response_id);
+        for content in response.contents {
+            if let CompletionResponseContent::Text(val) = content {
+                // println!("The text is: {}", val);
+                rcontent = val.to_string();
+                chat.update_assistant_message(val.to_string(), response.response_id.clone());
+            }
+        }
 
-        storage_guard
-            .update_chat(chat)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+        self.update_chat(chat).await?;
+        // storage_guard
+        //     .update_chat(chat)
+        //     .await
+        //     .map_err(|e| anyhow::anyhow!(e))?;
 
         //Create the chat response
         let response = ChatResponse {
             id: id,
-            role: MessageRole::Assistant.as_str().to_string(),
-            content: Some(response.content),
+            role: "assistant".to_string(),
+            content: Some(rcontent),
             response_id: Some(response.response_id),
         };
         debug!("Chat Request: {:#?}", response);
@@ -115,57 +212,99 @@ impl ChatService {
     pub async fn chat_completion_streaming(
         &self,
         request: ChatRequest,
-        agent_service: Arc<AgentService>,
     ) -> Result<CompletionStreamResponse> {
         debug!("Chat request: {:?}", request);
 
-        let mut storage_guard: tokio::sync::MutexGuard<'_, ChatStorage> = self.storage.lock().await;
-        let mut chat = storage_guard
-            .get_chat(request.clone().id)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        let agent = agent_service.get_chat_agent(&chat.llm)?;
+        let mut chat = self.get_chat_by_id(request.clone().id).await?;
+        // let mut storage_guard: tokio::sync::MutexGuard<'_, ChatStorage> = self.storage.lock().await;
+        // let mut chat = storage_guard
+        //     .get_chat(request.clone().id)
+        //     .await
+        //     .map_err(|e| anyhow::anyhow!(e))?;
 
         chat.update_user_message(request.prompt);
+        let messages = self.create_completion_messages(&chat);
 
-        let crequest = self.create_completion_request(chat, agent.temperature, agent.max_tokens);
-        agent.complete_with_stream(crequest).await
+        let agent = self.get_agent(&chat.llm, &chat.model);
+        // let crequest = self.create_completion_request(chat, agent.temperature, agent.max_tokens);
+        let stream = agent.complete_with_stream(&chat.system, &messages).await?;
+        Ok(stream)
     }
 
     pub async fn save_streaming_message(&self, request: ChatStreamingMessage) -> Result<()> {
-        let mut storage_guard: tokio::sync::MutexGuard<'_, ChatStorage> = self.storage.lock().await;
-        let mut chat = storage_guard
-            .get_chat(request.clone().id)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+        let mut chat = self.get_chat_by_id(request.clone().id).await?;
+
+        // let mut storage_guard: tokio::sync::MutexGuard<'_, ChatStorage> = self.storage.lock().await;
+        // let mut chat = storage_guard
+        //     .get_chat(request.clone().id)
+        //     .await
+        //     .map_err(|e| anyhow::anyhow!(e))?;
         chat.update_user_message(request.user_content);
         chat.update_assistant_message(request.assistant_content, request.response_id);
-        storage_guard
-            .update_chat(chat)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+
+        self.update_chat(chat).await?;
+        // storage_guard
+        //     .update_chat(chat)
+        //     .await
+        //     .map_err(|e| anyhow::anyhow!(e))?;
 
         Ok(())
     }
 
+    // fn create_completion_request(
+    //     &self,
+    //     chat: Chat,
+    //     temperature: f32,
+    //     max_tokens: i32,
+    // ) -> CompletionRequest {
+    //     //Create the completion request
 
-    fn create_completion_request(
-        &self,
-        chat: Chat,
-        temperature: f32,
-        max_tokens: i32,
-    ) -> CompletionRequest {
-        //Create the completion request
-        let crequest = CompletionRequest {
-            model: chat.model,
-            system: chat.system,
-            messages: chat.messages,
-            temperature: temperature,
-            max_tokens: max_tokens,
-            stream: chat.stream,
-        };
+    //     let mut nmessages = Vec::new();
+    //     for message in chat.messages {
+    //         if message.role == "user".to_string() {
+    //             let nmessage = Message::User {
+    //                 content: message.content,
+    //                 response_id: Some(message.response_id),
+    //             };
+    //             nmessages.push(nmessage);
+    //         } else {
+    //             let nmessage = Message::Assistant {
+    //                 content: message.content,
+    //                 response_id: Some(message.response_id),
+    //             };
+    //             nmessages.push(nmessage);
+    //         }
+    //     }
+    //     let crequest = CompletionRequest {
+    //         model: chat.model,
+    //         system: chat.system,
+    //         messages: nmessages,
+    //         temperature: temperature,
+    //         max_tokens: max_tokens,
+    //         stream: chat.stream,
+    //         definitions: Vec::new(),
+    //     };
 
-        crequest
+    //     crequest
+    // }
+
+    fn create_completion_messages(&self, chat: &Chat) -> Vec<Message>{
+        let mut nmessages = Vec::new();
+        for message in chat.clone().messages {
+            if message.role == "user".to_string() {
+                let nmessage = Message::User {
+                    content: message.content,
+                    response_id: Some(message.response_id),
+                };
+                nmessages.push(nmessage);
+            } else {
+                let nmessage = Message::Assistant {
+                    content: message.content,
+                    response_id: Some(message.response_id),
+                };
+                nmessages.push(nmessage);
+            }
+        }
+        nmessages
     }
 }

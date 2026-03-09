@@ -1,6 +1,5 @@
-use agentic_core::capabilities::completion::message::Message;
 use serde::{Deserialize, Serialize};
-use storage_core::core::RepoModel;
+use storage_core::core::{RepoModel, Searchable};
 use uuid::Uuid;
 use anyhow::Result;
 
@@ -12,9 +11,19 @@ pub struct Chat {
     pub model: String,
     pub system: Option<String>,
     pub prompt: String,
-    pub messages: Vec<Message>,
+    pub messages: Vec<ChatMessage>,
     pub stream: bool
 }
+
+impl Searchable for Chat {}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+    pub response_id: String
+}
+
 
 impl RepoModel<String> for Chat {
     fn id(&self) -> String {
@@ -35,13 +44,13 @@ impl Chat {
 
     // update the user message
     pub fn update_user_message(&mut self, content:String) {
-        let message =  Message::create_user_message(&content, None);
+        let message =  ChatMessage { role: "user".to_string(), content, response_id: "".to_string() };
         self.messages.push( message);
     }
 
     // update the assistant message
     pub fn update_assistant_message(&mut self, content: String, response_id: String) {
-        let message =  Message::create_assistant_message(&content, Some(response_id));
+        let message =  ChatMessage { role: "assistant".to_string(), content, response_id};
         self.messages.push(message);
     }
 }

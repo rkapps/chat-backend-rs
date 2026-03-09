@@ -1,4 +1,4 @@
-use agentic_core::agent::service::AgentService;
+use agentic_core::agent::service::LlmProvider;
 use anyhow::Result;
 use axum::{
     Json,
@@ -46,19 +46,21 @@ pub async fn get_chat_by_id_handler(
         .get_chat_by_id(id)
         .await
         .map_err(|e| to_chat_error_response("Chat Error", e))?;
+
+    debug!("get chat by id handler {:?}", chat);
+
     Ok(Json(chat))
 }
 
 pub async fn chat_completion_handler(
     State(chat_service): State<Arc<ChatService>>,
-    State(agent_service): State<Arc<AgentService>>,
     Json(payload): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, Json<ChatErrorResponse>)> {
     //get chat
     debug!("started chat_completion_streaming_handler {:?}", payload);
 
     let response = chat_service
-        .chat_completion(payload, agent_service)
+        .chat_completion(payload)
         .await
         .map_err(|e| to_chat_error_response("Chat completion error", e))?;
     Ok(Json(response))
@@ -66,15 +68,12 @@ pub async fn chat_completion_handler(
 
 pub async fn chat_completion_streaming_handler(
     State(chat_service): State<Arc<ChatService>>,
-    State(agent_service): State<Arc<AgentService>>,
     Json(payload): Json<ChatRequest>,
-    // ) -> Sse<impl Stream<Item = Result<Event, anyhow::Error>>> {
-    //get chat.a
 ) -> impl IntoResponse {
     debug!("started chat_completion_streaming_handler");
 
     let stream = match chat_service
-        .chat_completion_streaming(payload.clone(), agent_service)
+        .chat_completion_streaming(payload.clone())
         .await
     {
         Ok(stream) => stream,
@@ -126,6 +125,12 @@ pub async fn save_streaming_message_handler(
         .map_err(|e| to_chat_error_response("Chat save streaming message error", e))?;
 
     Ok(())
+}
+
+pub async fn llm_providers_handler(
+    State(chat_service): State<Arc<ChatService>>,
+) -> Result<Json<Vec<LlmProvider>>, Json<ChatErrorResponse>> {
+    Ok(Json(chat_service.get_llm_providers()))
 }
 
 fn to_chat_error_response(

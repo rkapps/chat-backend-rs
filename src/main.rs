@@ -1,16 +1,11 @@
 use agentic_core::{
     agent::service::AgentService,
-    providers::{anthropic, gemini, openai},
 };
 use agentic_rs::{
-    agents::handlers::llm_providers_handler,
     chat::{
-        handlers::{
-            chat_completion_handler, chat_completion_streaming_handler, create_chat_handler,
-            get_all_chats_handler, get_chat_by_id_handler, save_streaming_message_handler,
-        },
-        service::ChatService,
-        storage::ChatStorage,
+        self, handlers::{
+            chat_completion_handler, chat_completion_streaming_handler, create_chat_handler, get_all_chats_handler, get_chat_by_id_handler, llm_providers_handler, save_streaming_message_handler
+        }, service::ChatService, storage::ChatStorage
     },
     state::AppState,
 };
@@ -31,31 +26,44 @@ async fn main() -> Result<()> {
     agentic_rs::logger::set_logger();
 
     // initialize storage and the services
-    let storage = Mutex::new(ChatStorage::new(
-        "agenticdb".to_string(),
-        "data/agenticdb".to_string(),
-        "chats".to_string(),
-    ));
+    let storage =         ChatStorage::new(
+            "agenticdb".to_string(),
+            "data/agenticdb".to_string(),
+            "chats".to_string(),
+        )
+        .await?;
 
-    let mut agent_service = AgentService::new();
 
     let openai_api_key =
         env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
-
-    let _ = agent_service.set_client(openai::completion::LLM, &openai_api_key)?;
-
     let gemini_api_key =
         env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY environment variable not set");
-    let _ = agent_service.set_client(gemini::completion::LLM, &gemini_api_key)?;
-
     let anthropic_api_key =
         env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY environment variable not set");
-    let _ = agent_service.set_client(anthropic::completion::LLM, &anthropic_api_key)?;
 
-    let chat_service = ChatService::new(Arc::new(storage));
+    let agent_service = AgentService::new();
+    let openai_agent = agent_service
+        .builder()
+        .with_openai(&openai_api_key)?
+        .build()?;
+    let gemini_agent = agent_service
+        .builder()
+        .with_gemini(&gemini_api_key)?
+        .build()?;
+    let anthropic_agent = agent_service
+        .builder()
+        .with_anthropic(&anthropic_api_key)?
+        .build()?;
+
+
+    let mut chat_service = ChatService::new(storage);
+    chat_service.add_agent(openai_agent);
+    chat_service.add_agent(gemini_agent);
+    chat_service.add_agent(anthropic_agent);
+    chat_service.add_llm_provider(agent_service.get_llm_providers());
+
     let app_state = AppState {
         chat_service: Arc::new(chat_service),
-        agent_service: Arc::new(agent_service),
     };
 
     let cors = CorsLayer::new()
