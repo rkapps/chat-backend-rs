@@ -1,4 +1,4 @@
-# agentic-rs
+# chat-backend-rs
 
 Backend service for multi-provider LLM chat interactions with persistent storage.
 
@@ -67,7 +67,7 @@ agentic-rs (Backend)
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/agentic-rs.git
+git clone https://github.com/yourusername/chat-backend-rs.git
 cd agentic-rs
 cargo build --release
 ```
