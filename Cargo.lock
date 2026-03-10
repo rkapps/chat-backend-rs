@@ -24,28 +24,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentic-rs"
-version = "0.1.0"
-dependencies = [
- "agentic-core",
- "anyhow",
- "async-trait",
- "axum",
- "bytes",
- "futures",
- "futures-util",
- "reqwest",
- "serde",
- "serde_json",
- "storage-core",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "ahash"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -344,6 +322,28 @@ name = "cfg_aliases"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
+
+[[package]]
+name = "chat-backend-rs"
+version = "0.1.0"
+dependencies = [
+ "agentic-core",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bytes",
+ "futures",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "storage-core",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
 
 [[package]]
 name = "chrono"

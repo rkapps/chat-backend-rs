@@ -1,13 +1,12 @@
 use agentic_core::{
     agent::service::AgentService,
 };
-use agentic_rs::{
+use chat_backend_rs::{
     chat::{
-        self, handlers::{
+        handlers::{
             chat_completion_handler, chat_completion_streaming_handler, create_chat_handler, get_all_chats_handler, get_chat_by_id_handler, llm_providers_handler, save_streaming_message_handler
         }, service::ChatService, storage::ChatStorage
-    },
-    state::AppState,
+    }, logger, state::AppState
 };
 use anyhow::Result;
 use axum::{
@@ -16,14 +15,14 @@ use axum::{
     routing::{get, post},
 };
 use std::{env, sync::Arc};
-use tokio::{net::TcpListener, sync::Mutex};
+use tokio::{net::TcpListener};
 use tower_http::cors::CorsLayer;
 use tracing::debug;
 
 #[tokio::main]
 
 async fn main() -> Result<()> {
-    agentic_rs::logger::set_logger();
+    logger::set_logger();
 
     // initialize storage and the services
     let storage =         ChatStorage::new(
