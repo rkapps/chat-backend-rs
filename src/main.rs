@@ -1,21 +1,25 @@
-use agentic_core::{
-    agent::service::AgentService,
-};
-use chat_backend_rs::{
-    chat::{
-        handlers::{
-            chat_completion_handler, chat_completion_streaming_handler, create_chat_handler, get_all_chats_handler, get_chat_by_id_handler, llm_providers_handler, save_streaming_message_handler
-        }, service::ChatService, storage::ChatStorage
-    }, logger, state::AppState
-};
+use agentic_core::agent::service::AgentService;
 use anyhow::Result;
 use axum::{
     Router,
     http::{HeaderValue, Method},
     routing::{get, post},
 };
+use chat_backend_rs::{
+    chat::{
+        handlers::{
+            chat_completion_handler, chat_completion_streaming_handler, create_chat_handler,
+            get_all_chats_handler, get_chat_by_id_handler, llm_providers_handler,
+            save_streaming_message_handler,
+        },
+        service::ChatService,
+        storage::ChatStorage,
+    },
+    logger,
+    state::AppState,
+};
 use std::{env, sync::Arc};
-use tokio::{net::TcpListener};
+use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tracing::debug;
 
@@ -25,13 +29,12 @@ async fn main() -> Result<()> {
     logger::set_logger();
 
     // initialize storage and the services
-    let storage =         ChatStorage::new(
-            "agenticdb".to_string(),
-            "data/agenticdb".to_string(),
-            "chats".to_string(),
-        )
-        .await?;
-
+    let storage = ChatStorage::new(
+        "agenticdb".to_string(),
+        "data/agenticdb".to_string(),
+        "chats".to_string(),
+    )
+    .await?;
 
     let openai_api_key =
         env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
@@ -54,7 +57,6 @@ async fn main() -> Result<()> {
         .with_anthropic(&anthropic_api_key)?
         .build()?;
 
-
     let mut chat_service = ChatService::new(storage);
     chat_service.add_agent(openai_agent);
     chat_service.add_agent(gemini_agent);
@@ -65,8 +67,14 @@ async fn main() -> Result<()> {
         chat_service: Arc::new(chat_service),
     };
 
+    let origins = [
+        "http://localhost:4200".parse::<HeaderValue>().unwrap(),
+        "http://localhost:4201".parse::<HeaderValue>().unwrap(),
+        "http://localhost:4202".parse::<HeaderValue>().unwrap(),
+    ];
+
     let cors = CorsLayer::new()
-        .allow_origin("http://localhost:4200".parse::<HeaderValue>().unwrap())
+        .allow_origin(origins)
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([axum::http::header::CONTENT_TYPE]);
 
@@ -82,8 +90,8 @@ async fn main() -> Result<()> {
         .with_state(app_state) // Shared state
         ;
 
-    let listener = TcpListener::bind("127.0.0.1:3001").await.unwrap();
-    println!("🚀 Listening on http://127.0.0.1:3001");
+    let listener = TcpListener::bind("127.0.0.1:8080").await.unwrap();
+    println!("🚀 Listening on http://127.0.0.1:8080");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(handle_shutdown())
