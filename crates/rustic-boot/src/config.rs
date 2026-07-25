@@ -81,16 +81,19 @@ pub async fn load_agents_config(
             )
         })?;
 
-        let response_format_schema_path =
-            format!("{}/{}", config_dir, agent.response_format_schema_path);
-        info!(
-            "Response format schema path: {}",
-            response_format_schema_path
-        );
+        if !agent.response_format_schema_path.is_empty() {
+            let response_format_schema_path =
+                format!("{}/{}", config_dir, agent.response_format_schema_path);
+            info!(
+                "Response format schema path: {}",
+                response_format_schema_path
+            );
 
-        if let Ok(schema) = load_content(response_format_schema_path.clone()).await {
-            agent.response_format_schema = Some(serde_json::Value::from_str(&schema)?);
-            trace!("response schema: {:?}", agent.response_format_schema);
+            if let Ok(schema) = load_content(response_format_schema_path.clone()).await {
+                agent.response_format_schema = Some(serde_json::Value::from_str(&schema)?);
+                trace!("response schema: {:?}", agent.response_format_schema);
+            }
+            info!("Response format schema: {:?}", agent.response_format_schema);
         }
     }
     Ok(agents)
