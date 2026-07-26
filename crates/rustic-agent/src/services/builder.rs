@@ -58,6 +58,7 @@ pub struct AgentBuilder<'a> {
     filtered_mcp: Option<MCPRegistry>,
     strategy: Option<CompletionStrategy>,
     response_format_schema: Option<Value>,
+    relay_tool_output: bool
 }
 
 impl<'a> AgentBuilder<'a> {
@@ -78,9 +79,16 @@ impl<'a> AgentBuilder<'a> {
             filtered_mcp: None,
             strategy: None,
             response_format_schema: None,
+            relay_tool_output: false
         }
     }
 
+    /// Set the relay_tool_output
+    pub fn with_relay_tool_output(mut self, relay_tool_output: bool) -> Self {
+        self.relay_tool_output = relay_tool_output;
+        self
+    }
+    
     /// Set the system prompt prepended before every conversation.
     pub fn with_system_prompt(mut self, system_prompt: String) -> Self {
         self.system_prompt = Some(system_prompt);
@@ -417,12 +425,7 @@ impl<'a> AgentBuilder<'a> {
         let reasoning_effort = self.reasoning_effort;
         let enable_cache = self.enable_cache;
         let response_format_schema = self.response_format_schema;
-
-        // let store = match &self.strategy {
-        //     Some(CompletionStrategy::Stateful) => true,
-        //     Some(CompletionStrategy::Stateless) => false,
-        //     None => false, // default to stateless
-        // };
+        let relay_tool_output = self.relay_tool_output;
         let store = true;
 
         Ok(Agent {
@@ -439,6 +442,7 @@ impl<'a> AgentBuilder<'a> {
             tool_registry,
             mcp_registry,
             response_format_schema,
+            relay_tool_output
         })
     }
 }

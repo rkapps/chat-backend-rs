@@ -11,15 +11,13 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Instrument, debug, error, info, trace};
 
 use crate::{
-    agents::helper::unwrap_typed_value,
-    client::{
+    agents::helper::{merge_tool_output, unwrap_typed_value}, client::{
         llm::LlmClient,
         message::Message,
         request::{CompletionRequest, ReasoningEffort},
         response::{CompletionChunkResponse, CompletionResponse, CompletionResponseContent},
         tools::{ToolCallRequest, ToolDefinition},
-    },
-    tools::{mcp::MCPRegistry, tool::ToolRegistry},
+    }, tools::{mcp::MCPRegistry, tool::ToolRegistry},
 };
 
 /// Orchestrates LLM completion calls and tool dispatching for a single configured model.
@@ -61,6 +59,7 @@ pub struct Agent {
     /// Registry of remote MCP server tools the agent can call.
     pub mcp_registry: Arc<MCPRegistry>,
     pub response_format_schema: Option<Value>,
+    pub relay_tool_output: bool,
 }
 
 impl Agent {
@@ -87,6 +86,7 @@ impl Agent {
             _model = %self.model,
             _provider = %self.llm,
             _reasoning_effort= ?self.reasoning_effort,
+            _relay_tool_output= %self.relay_tool_output,
             _store = %self.store,
             _temperature = %self.temperature,
         )
@@ -129,6 +129,7 @@ impl Agent {
         let messages = messages.to_vec();
         let mut last_response_id = last_response_id.clone();
         let mut iterations = HashMap::new();
+        let relay_tool_output = self.relay_tool_output.clone();
 
         tokio::spawn(
             async move {
@@ -312,11 +313,19 @@ impl Agent {
                         });
                     }
 
+                    let mut merged = serde_json::Map::new();
                     for result in results {
                         match result {
                             Ok((tool_call, tool_output)) => {
                                 nmessages.push(tool_call);
-                                nmessages.push(tool_output);
+                                nmessages.push(tool_output.clone());
+                                merge_tool_output(&mut merged, &tool_output);
+
+                                // if let Message::ToolOutput { output, .. } = &tool_output {
+                                //     if let Value::Object(map) = output {
+                                //         merged.extend(map.clone());
+                                //     }                               
+                                // }
                             }
                             Err(e) => {
                                 error!(
@@ -327,12 +336,42 @@ impl Agent {
                         };
                     }
 
+                    iter_span.in_scope(|| {
+                        info!(
+                            _new_messages= ?nmessages.len(),
+                        );
+                    });
+
+                    if relay_tool_output {
+                        match serde_json::to_string(&merged) {
+                            Ok(c) => {
+
+                            iter_span.in_scope(|| {
+                                info!(
+                                    relay_tool_output_response= %format_args!("{:#?}", c),
+                                    usage= %format_args!("{:#?}", usage),
+                                    "Response Stats final"
+                                );
+                            });
+        
+                            let chunk = CompletionChunkResponse::content(agent_id.clone(), c, String::new());
+                            let _ = tx.send(Ok(chunk)).await;
+                            let _ = tx
+                                .send(Ok(CompletionChunkResponse::stop(
+                                    agent_id.clone(),
+                                    model,
+                                    last_response_id.clone().unwrap_or_default(),
+                                    Some(usage),
+                                )))
+                                .await;
+                            break;
+
+                            },
+                            Err(_) => todo!(),
+                        };
+                    }
+
                     if !nmessages.is_empty() {
-                        iter_span.in_scope(|| {
-                            info!(
-                                nmessages= ?nmessages.len(),
-                            );
-                        });
                         iterations.insert(iteration, nmessages);
                     }
                 }
@@ -363,6 +402,7 @@ impl Agent {
             _model = %self.model,
             _provider = %self.llm,
             _reasoning_effort= ?self.reasoning_effort,
+            _relay_tool_output= %self.relay_tool_output,           
             _store = %self.store,
             _temperature = %self.temperature,
         )
@@ -372,7 +412,6 @@ impl Agent {
         messages: &[Message],
         last_response_id: Option<String>,
     ) -> HttpResult<CompletionResponse> {
-        let agent_id = &self.id;
 
         let mut definitions: Vec<ToolDefinition> = self
             .tool_registry
@@ -400,6 +439,7 @@ impl Agent {
 
         let mut last_response_id = last_response_id.clone();
         let mut iterations = HashMap::new();
+        let relay_tool_output = self.relay_tool_output;
 
         let request = CompletionRequest {
             id: self.id.clone(),
@@ -424,6 +464,7 @@ impl Agent {
 
         let mut nrequest = request;
         let delay = Duration::from_millis(2000);
+        let agent_id = self.id.clone();
 
         loop {
             let iter_span = tracing::span!(
@@ -561,11 +602,17 @@ impl Agent {
             //Add thoughts to the messages first
             let mut nmessages: Vec<Message> = Vec::new();
             nmessages.extend(thoughts);
+
+            // for relay_tool_output get the merged json
+            let mut merged = serde_json::Map::new();
+
             for result in results {
                 match result {
                     Ok((tool_call, tool_output)) => {
                         nmessages.push(tool_call);
-                        nmessages.push(tool_output);
+                        nmessages.push(tool_output.clone());
+
+                        merge_tool_output(&mut merged, &tool_output);
                     }
                     Err(e) => {
                         iter_span.in_scope(|| {
@@ -578,9 +625,36 @@ impl Agent {
             iter_span.in_scope(|| {
                 info!(
                     _last_response_id = ?last_response_id,
-                    _new_mesages = ?nmessages.len()
+                    _new_messages= ?nmessages.len(),
                 );
             });
+
+            if relay_tool_output {
+                match serde_json::to_string(&merged) {
+                    Ok(c) => {
+                        let content = CompletionResponseContent::Text(c);
+                        let nresponse = CompletionResponse{
+                            contents: vec![content],
+                            id: agent_id,
+                            model: response.model,
+                            usage: response.usage,
+                            response_id: last_response_id.unwrap_or_default()
+                        };
+
+                        iter_span.in_scope(|| {
+                            info!(
+                                relay_tool_output_response= %format_args!("{:#?}", nresponse.text() ),
+                                usage= %format_args!("{:#?}", nresponse.usage),
+                                "Response Stats final"
+                            );
+                        });
+        
+                        return Ok(nresponse)
+                    },
+                    Err(_) => todo!(),
+                };
+            }
+
 
             if !nmessages.is_empty() {
                 iterations.insert(iteration, nmessages);

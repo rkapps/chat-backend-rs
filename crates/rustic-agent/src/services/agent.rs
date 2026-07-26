@@ -136,8 +136,8 @@ impl AgentService {
         agent_id: &str,
         llm_config: &LlmConfig,
         system_prompt: Option<String>,
-        strategy: &CompletionStrategy,
         response_format_schema: &Option<Value>,
+        relay_tool_output: &bool
     ) -> Result<Agent> {
         let agent_config = self.find_agent_config(agent_id).await?;
 
@@ -192,7 +192,6 @@ impl AgentService {
 
         // info!("System Prompt: {}", agent_config.system_prompt);
         info!(
-            strategy= ?strategy,
             preset= ?preset,
             tools= ?tool_registry.get_tools().len(),
             // system_prompt= ?agent_config.system_prompt,
@@ -201,8 +200,8 @@ impl AgentService {
 
         let agent = self
             .builder(&agent_config.id)
-            .with_strategy(strategy.clone())
             .with_system_prompt(system_prompt.unwrap_or_default())
+            .with_relay_tool_output(relay_tool_output.clone())
             .with_response_format_schema(response_format_schema.clone())
             .with_tools(tool_registry.get_tools())
             .with_filtered_mcp(mcp_registry)
@@ -275,14 +274,14 @@ impl AgentService {
                 &input.agent_id,
                 &input_llm_config,
                 input.system_prompt.clone(),
-                &input.strategy,
                 &config.response_format_schema,
+                &input.relay_tool_output
             )
             .await?;
 
         match config.execution {
             ExecutionType::SingleAgent | ExecutionType::PipelineAgent => {
-                Ok(Arc::new(SingleAgent::new(agent, input.strategy.clone())))
+                Ok(Arc::new(SingleAgent::new(agent)))
             }
             ExecutionType::Pipeline => {
                 let pipeline_config = config.pipeline.expect(&format!(
@@ -303,7 +302,6 @@ impl AgentService {
 
                 for sub_agent in available_agents {
                     let sub_config = self.find_agent_config(&sub_agent.id).await?;
-                    let strategy = sub_config.get_strategy();
 
                     // resolution — sub_agent_ref override merges with sub_config default
                     // which merges with conversation llm_config as final fallback
@@ -317,7 +315,7 @@ impl AgentService {
                         sub_agent.id.clone(),
                         resolved_llm,
                         Some(sub_config.system_prompt),
-                        strategy,
+                        sub_agent.relay_tool_output.unwrap_or_default(),
                     );
                     let sub_agent = Box::pin(self.build_runnable_agent(&sub_input, visited))
                         .await

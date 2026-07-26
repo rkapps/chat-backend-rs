@@ -5,7 +5,8 @@
 //! They handle `Message` construction from turn history, status-string formatting,
 //! multi-agent response merging, and JSON fence stripping.
 
-use serde_json::Value;
+use anyhow::Result;
+use serde_json::{Value, json};
 
 use crate::{
     CompletionResponse, CompletionResponseTokenUsage, Message,
@@ -83,7 +84,10 @@ pub fn merge_responses(
 /// Many models wrap JSON responses in fences even when instructed not to; this normalises
 /// the text before deserialisation.
 pub fn build_clean_json(text: &str) -> String {
-    text.trim()
+    let extracted = extract_json_object(text).unwrap_or(text);
+
+    extracted
+        .trim()
         .trim_start_matches("```json")
         .trim_start_matches("```")
         .trim_end_matches("```")
@@ -120,4 +124,56 @@ pub fn unwrap_typed_value(v: Value) -> Value {
         }
         other => other.clone(),
     }
+}
+
+pub fn merge_tool_output(merged: &mut serde_json::Map<String, Value>, tool_output: &Message) {
+    if let Message::ToolOutput { output, .. } = tool_output {
+        if let Value::Object(map) = output {
+            for (key, value) in map {
+                match merged.get_mut(key) {
+                    Some(existing) => {
+                        match (existing, value) {
+                            // both arrays — flat extend
+                            (Value::Array(e), Value::Array(n)) => {
+                                e.extend(n.clone());
+                            }
+                            // existing array, new single value — push
+                            (Value::Array(e), n) => {
+                                e.push(n.clone());
+                            }
+                            // existing scalar, new array — prepend existing into array
+                            (e, Value::Array(n)) => {
+                                let mut arr = vec![e.clone()];
+                                arr.extend(n.clone());
+                                *e = Value::Array(arr);
+                            }
+                            // both scalars — convert to array
+                            (e, n) => {
+                                *e = json!([e.clone(), n.clone()]);
+                            }
+                        }
+                    }
+                    None => {
+                        merged.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn extract_json_object(response: &str) -> Result<&str> {
+    let start = response.find('{').ok_or_else(|| {
+        anyhow::anyhow!("No JSON object found — missing opening '{{' in response")
+    })?;
+
+    let end = response.rfind('}').ok_or_else(|| {
+        anyhow::anyhow!("No JSON object found — missing closing '}}' in response")
+    })?;
+
+    if end < start {
+        return Err(anyhow::anyhow!("Malformed JSON — '}}' appears before '{{'"));
+    }
+
+    Ok(&response[start..=end])
 }

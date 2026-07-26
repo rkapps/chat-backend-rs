@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Preset, services::config::agent::CompletionStrategy};
-
+use crate::Preset;
 /// All runtime parameters needed to build a [`Runnable`](super::runner::Runnable) for an agent.
 ///
 /// Passed to [`AgentService::build_runnable`](crate::services::agent::AgentService::build_runnable)
@@ -13,9 +12,9 @@ pub struct AgentInput {
     pub llm_config: LlmConfig,
     /// Optional system prompt override; `None` falls back to an empty string.
     pub system_prompt: Option<String>,
-    pub strategy: CompletionStrategy,
     /// Nested sub-agent inputs; empty for leaf agents, unused by `new()`.
     pub subs: Vec<AgentInput>,
+    pub relay_tool_output: bool
 }
 
 impl AgentInput {
@@ -23,14 +22,15 @@ impl AgentInput {
         agent_id: String,
         llm_config: LlmConfig,
         system_prompt: Option<String>,
-        strategy: CompletionStrategy,
+        relay_tool_output: bool
     ) -> Self {
         Self {
             agent_id,
             llm_config,
             system_prompt,
-            strategy,
+            // strategy,
             subs: Vec::new(),
+            relay_tool_output
         }
     }
 }

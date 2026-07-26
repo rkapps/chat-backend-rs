@@ -34,7 +34,7 @@ pub async fn build_agent_runner(
         agent_id,
         llm_config,
         conversation.system_prompt.clone(),
-        conversation.strategy.clone(),
+        false
     );
 
     agent_service.build_runnable(&input).await

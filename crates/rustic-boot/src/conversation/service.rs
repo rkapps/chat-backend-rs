@@ -213,7 +213,7 @@ impl ConversationService {
 
         //capture the start time
         let start = std::time::Instant::now();
-        let cresponse = runner.execute(cturns, &request.prompt).await?;
+        let cresponse = runner.execute(cturns, &request.prompt, true).await?;
         let elapsed = start.elapsed();
 
         let response = cresponse.clone();
@@ -271,7 +271,7 @@ impl ConversationService {
         let cturns = build_completion_turns(&conversation, turns);
 
         let runner = build_agent_runner(self.agent_service.clone(), &conversation).await?;
-        let stream = runner.execute_streaming(cturns, &request.prompt).await?;
+        let stream = runner.execute_streaming(cturns, &request.prompt, true).await?;
         Ok(Box::pin(stream))
     }
 

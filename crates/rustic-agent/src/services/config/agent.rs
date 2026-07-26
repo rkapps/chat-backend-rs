@@ -73,7 +73,6 @@ pub struct PipelineConfig {
 pub struct PipelineStage {
     pub name: String,
     pub parallel: bool,
-    pub relay: bool,
     pub sub_agents: Vec<AvailableAgent>,
 }
 
@@ -82,6 +81,7 @@ pub struct AvailableAgent {
     pub id: String,
     #[serde(default)]
     pub llm_config: Option<LlmConfig>,
+    pub relay_tool_output: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
