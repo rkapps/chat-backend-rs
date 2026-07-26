@@ -42,10 +42,10 @@ pub struct ModelConfig {
     pub id: String,
     /// When `false` the config is skipped during startup.
     pub enabled: bool,
-    pub input_cost_per_1k: f64,
-    pub cached_read_cost_per_1k: f64,
-    pub cached_write_cost_per_1k: f64,
-    pub output_cost_per_1k: f64,
+    pub input_cost: f64,
+    pub cached_read_cost: f64,
+    pub cached_write_cost: f64,
+    pub output_cost: f64,
 }
 
 impl ModelConfig {

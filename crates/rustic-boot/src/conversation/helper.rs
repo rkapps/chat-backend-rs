@@ -88,13 +88,13 @@ pub fn calculate_turn_cost(
         && let Some(model_config) = provider.clone().models.iter().find(|m| m.id == model)
     {
         let input_tokens_cost =
-            (usage.input_tokens as f64 / 1000.0) * model_config.input_cost_per_1k;
+            (usage.input_tokens as f64 / 1_000_000.0) * model_config.input_cost;
         let cached_read_tokens_cost =
-            (usage.cached_read_tokens as f64 / 1000.0) * model_config.cached_read_cost_per_1k;
+            (usage.cached_read_tokens as f64 / 1_000_000.0) * model_config.cached_read_cost;
         let cached_write_tokens_cost =
-            (usage.cached_write_tokens as f64 / 1000.0) * model_config.cached_write_cost_per_1k;
+            (usage.cached_write_tokens as f64 / 1_000_000.0) * model_config.cached_write_cost;
         let output_tokens_cost =
-            (usage.output_tokens as f64 / 1000.0) * model_config.output_cost_per_1k;
+            (usage.output_tokens as f64 / 1_000_000.0) * model_config.output_cost;
 
         let total_cost = input_tokens_cost
             + cached_read_tokens_cost
