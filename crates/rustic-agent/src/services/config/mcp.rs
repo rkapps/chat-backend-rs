@@ -15,6 +15,8 @@ pub struct MCPServerConfig {
     pub url: String,
     /// Name of the environment variable that holds the Bearer token for this server.
     pub api_key_env: String,
+    /// Optional header name to use
+    pub auth_header_name: Option<String>,
     /// Tool names to register from this server; only these tools are exposed to agents.
     pub enabled_tools: Vec<String>,
 }
@@ -31,6 +33,7 @@ impl MCPServerConfig {
             name: self.name.clone(),
             url: self.url.clone(),
             api_key,
+            auth_header_name: self.auth_header_name.clone()
         })
     }
 }

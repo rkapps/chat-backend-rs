@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rustic_core::HttpClient;
 use serde_json::{Value, json};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::{
     client::{
@@ -27,6 +27,8 @@ pub struct MCPServerSetting {
     pub url: String,
     /// Bearer token for authentication; leave empty if the server has no auth.
     pub api_key: String,
+    /// Optional header name to use
+    pub auth_header_name: Option<String>,
 }
 
 /// Aggregates multiple [`MCPClient`] instances and exposes a unified tool surface to [`Agent`](crate::agents::Agent).
@@ -177,6 +179,7 @@ pub struct MCPClient {
     pub name: String,
     pub url: String,
     pub api_key: String,
+    pub auth_header_name: Option<String>,
     http_client: HttpClient,
     server_adapter: Arc<Box<dyn MCPServerAdapter>>,
     /// Session token for stateful MCP transports; `None` for stateless servers.
@@ -190,6 +193,7 @@ impl MCPClient {
             name: setting.name,
             url: setting.url,
             api_key: setting.api_key,
+            auth_header_name: setting.auth_header_name,
             http_client: HttpClient::new()?,
             server_adapter: Arc::new(adapter),
             session_id: Arc::new(None.into()),
@@ -236,11 +240,21 @@ impl MCPClient {
         );
 
         if !self.api_key.is_empty() {
-            headers.insert(
-                "Authorization",
-                HeaderValue::from_str(&format!("Bearer {}", self.api_key))?,
-            );
+            let header_name = self.auth_header_name.as_deref().unwrap_or("Authorization");
+
+            if header_name == "Authorization" {
+                headers.insert(
+                    "Authorization",
+                    HeaderValue::from_str(&format!("Bearer {}", self.api_key))?,
+                );
+            } else {
+                headers.insert(
+                    HeaderName::from_str(header_name)?,
+                    HeaderValue::from_str(&self.api_key)?,
+                );
+            }
         }
+        debug!("headers: {:?}", headers);
 
         // include session ID if we have one
         let session = self.session_id.read().await;
@@ -324,6 +338,8 @@ impl MCPServerAdapter for StandardAdapter {
     }
 
     fn parse_tool_list_response(&self, text: String) -> Result<String> {
+        info!("parse_tool_list_response: {:?}", text);
+
         Ok(text)
     }
 
