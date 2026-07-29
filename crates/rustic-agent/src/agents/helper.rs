@@ -128,6 +128,16 @@ pub fn unwrap_typed_value(v: Value) -> Value {
 
 pub fn merge_tool_output(merged: &mut serde_json::Map<String, Value>, tool_output: &Message) {
     if let Message::ToolOutput { output, .. } = tool_output {
+        // parse string output to Value if needed
+        let parsed;
+        let output = match output {
+            Value::String(s) => {
+                parsed = serde_json::from_str(s).unwrap_or(output.clone());
+                &parsed
+            }
+            other => other,
+        };
+
         if let Value::Object(map) = output {
             for (key, value) in map {
                 match merged.get_mut(key) {
@@ -158,9 +168,30 @@ pub fn merge_tool_output(merged: &mut serde_json::Map<String, Value>, tool_outpu
                     }
                 }
             }
+        } else if let Value::Array(arr) = output {
+            // tool returned a top-level array — merge each object's fields
+            for item in arr {
+                if let Value::Object(map) = item {
+                    for (key, value) in map {
+                        match merged.get_mut(key) {
+                            Some(existing) => {
+                                if let Value::Array(e) = existing {
+                                    e.push(value.clone());
+                                } else {
+                                    *existing = json!([existing.clone(), value.clone()]);
+                                }
+                            }
+                            None => {
+                                merged.insert(key.clone(), json!([value.clone()]));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
+
 
 pub fn extract_json_object(response: &str) -> Result<&str> {
     let start = response.find('{').ok_or_else(|| {
