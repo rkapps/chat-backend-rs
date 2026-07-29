@@ -566,7 +566,8 @@ impl Agent {
                 })
                 .collect();
 
-            let semaphore = Arc::new(Semaphore::new(3)); // max 3 parallel
+            // setting permits to 10 - multiple agents can be running multiple tools parallely
+            let semaphore = Arc::new(Semaphore::new(10)); // max 3 parallel
 
             let tool_futures: Vec<_> = tool_calls
                 .into_iter()
@@ -625,7 +626,9 @@ impl Agent {
             iter_span.in_scope(|| {
                 info!(
                     _last_response_id = ?last_response_id,
+                    _merged=?merged,
                     _new_messages= ?nmessages.len(),
+                    _relay_tool_output= %relay_tool_output
                 );
             });
 
@@ -651,8 +654,11 @@ impl Agent {
         
                         return Ok(nresponse)
                     },
-                    Err(_) => todo!(),
-                };
+                    Err(e) => {
+                        iter_span.in_scope(|| {
+                            error!(target: "agent-tool", agent= %agent_id, error= ?e, "Tool Call Error");
+                        });
+                    }                };
             }
 
 
