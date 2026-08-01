@@ -357,24 +357,18 @@ impl<'a> AgentBuilder<'a> {
     }
 
     fn together_client(&self, api_key: &str) -> Result<Arc<dyn LlmClient>> {
-        debug!("together client: {}", api_key);
-
         let client = TogetherClient::new(api_key.to_string())
             .with_context(|| anyhow::anyhow!("Error creating Together client"))?;
         Ok(Arc::new(client))
     }
 
     fn fireworks_client(&self, api_key: &str) -> Result<Arc<dyn LlmClient>> {
-        debug!("fireworks client: {}", api_key);
-
         let client = FireworksClient::new(api_key.to_string())
             .with_context(|| anyhow::anyhow!("Error creating Fireworks client"))?;
         Ok(Arc::new(client))
     }
 
     fn mistral_client(&self, api_key: &str) -> Result<Arc<dyn LlmClient>> {
-        debug!("mistral client: {}", api_key);
-
         let client = MistralClient::new(api_key.to_string())
             .with_context(|| anyhow::anyhow!("Error creating Mistral client"))?;
         Ok(Arc::new(client))
