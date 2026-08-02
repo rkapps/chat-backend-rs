@@ -137,7 +137,7 @@ impl AgentService {
         llm_config: &LlmConfig,
         system_prompt: Option<String>,
         response_format_schema: &Option<Value>,
-        relay_tool_output: &bool
+        relay_tool_output: &bool,
     ) -> Result<Agent> {
         let agent_config = self.find_agent_config(agent_id).await?;
 
@@ -275,7 +275,7 @@ impl AgentService {
                 &input_llm_config,
                 input.system_prompt.clone(),
                 &config.response_format_schema,
-                &input.relay_tool_output
+                &input.relay_tool_output,
             )
             .await?;
 

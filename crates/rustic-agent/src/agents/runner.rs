@@ -12,10 +12,12 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
 use crate::{
-    Agent, CompletionChunkResponse, CompletionResponse, CompletionResponseContent,
-    CompletionResponseTokenUsage, Message,
+    Agent, Message, TokenUsage,
     agents::{
-        domain::{AgentGoal, CompletionTurn, ExecutionMode, StageDecision},
+        domain::{
+            AgentChunkResponse, AgentGoal, AgentResponse, CompletionTurn, ExecutionMode,
+            StageDecision, StageResponse, TurnChunkResponse, TurnResponse,
+        },
         helper::{
             build_clean_json, build_decision_status, build_messages_from_turns, merge_responses,
         },
@@ -40,7 +42,7 @@ pub trait Runnable: Send + Sync + Debug {
         turns: Vec<CompletionTurn>,
         prompt: &str,
         store: bool,
-    ) -> HttpResult<CompletionResponse>;
+    ) -> HttpResult<TurnResponse>;
 
     /// Execute and stream [`CompletionChunkResponse`] items through the returned channel.
     async fn execute_streaming(
@@ -48,7 +50,7 @@ pub trait Runnable: Send + Sync + Debug {
         turns: Vec<CompletionTurn>,
         prompt: &str,
         store: bool,
-    ) -> HttpResult<ReceiverStream<HttpResult<CompletionChunkResponse>>>;
+    ) -> HttpResult<ReceiverStream<HttpResult<TurnChunkResponse>>>;
 
     fn get_agent_id(&self) -> &String;
     fn get_agent(&self) -> &Agent;
@@ -103,7 +105,7 @@ pub struct PipeLineAgent {
     pub pipeline_type: String,
     pub stages: Vec<PipelineStage>,
     pub subs: Vec<Arc<dyn Runnable>>,
-    pub usage: CompletionResponseTokenUsage,
+    pub usage: TokenUsage,
 }
 
 #[async_trait]
@@ -125,7 +127,7 @@ impl Runnable for SingleAgent {
         turns: Vec<CompletionTurn>,
         prompt: &str,
         store: bool,
-    ) -> HttpResult<CompletionResponse> {
+    ) -> HttpResult<TurnResponse> {
         let (mut messages, last_response_id) = build_messages_from_turns(&turns);
         messages.push(Message::user(prompt.to_string()));
 
@@ -133,7 +135,11 @@ impl Runnable for SingleAgent {
         let mut agent = self.get_agent().clone();
         agent.store = store;
 
-        agent.complete(&messages, last_response_id).await
+        let agent_response = agent.complete(&messages, last_response_id).await?;
+        Ok(TurnResponse::for_single_agent(
+            prompt.to_string(),
+            agent_response,
+        ))
     }
 
     #[tracing::instrument(
@@ -152,16 +158,60 @@ impl Runnable for SingleAgent {
         turns: Vec<CompletionTurn>,
         prompt: &str,
         store: bool,
-    ) -> HttpResult<ReceiverStream<HttpResult<CompletionChunkResponse>>> {
+    ) -> HttpResult<ReceiverStream<HttpResult<TurnChunkResponse>>> {
         let (mut messages, last_response_id) = build_messages_from_turns(&turns);
         messages.push(Message::user(prompt.to_string()));
 
         // mutate agent with store
         let mut agent = self.get_agent().clone();
         agent.store = store;
-        agent
+        let mut agent_stream = agent
             .complete_with_streaming(&messages, last_response_id)
-            .await
+            .await?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let prompt_clone = prompt.to_string().clone();
+
+        tokio::spawn(async move {
+            while let Some(chunk) = agent_stream.next().await {
+                match chunk {
+                    Ok(AgentChunkResponse::Content { content, .. }) => {
+                        let _ = tx
+                            .send(Ok(TurnChunkResponse::Content {
+                                agent_id: agent.id.clone(),
+                                content,
+                            }))
+                            .await;
+                    }
+                    Ok(AgentChunkResponse::Thought { thought, .. }) => {
+                        let _ = tx
+                            .send(Ok(TurnChunkResponse::Thought {
+                                agent_id: agent.id.clone(),
+                                thought,
+                            }))
+                            .await;
+                    }
+                    // Ok(AgentChunkResponse::Status { status, .. }) => {
+                    //     let _ = tx.send(Ok(TurnChunkResponse::Status { status })).await;
+                    // }
+                    Ok(AgentChunkResponse::Final { response }) => {
+                        let turn_response =
+                            TurnResponse::for_single_agent(prompt_clone.clone(), response);
+                        let _ = tx
+                            .send(Ok(TurnChunkResponse::Final {
+                                response: turn_response,
+                            }))
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e)).await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(ReceiverStream::new(rx))
     }
 
     fn get_agent_id(&self) -> &String {
@@ -193,45 +243,31 @@ impl Runnable for PipeLineAgent {
         turns: Vec<CompletionTurn>,
         prompt: &str,
         store: bool,
-    ) -> HttpResult<CompletionResponse> {
-
+    ) -> HttpResult<TurnResponse> {
         let stream = if self.pipeline_type == "deterministic" {
             self.execute_streaming_deterministic(turns, prompt, store)
                 .await?
         } else {
             self.execute_streaming_dynamic(turns, prompt, store).await?
         };
-        let mut final_response = String::new();
-        let mut usage = CompletionResponseTokenUsage::default();
+
         tokio::pin!(stream);
 
         while let Some(chunk) = stream.next().await {
-            trace!("execute chunk: {:?}", chunk);
             match chunk {
-                Ok(chunk) => {
-                    if chunk.is_final {
-                        if let Some(cusage) = chunk.usage {
-                            usage += cusage;
-                        }
-                    } else {
-                        final_response.push_str(&chunk.content);
-                    }
+                Ok(TurnChunkResponse::Final { response }) => {
+                    return Ok(response);
+                }
+                Ok(_) => {
+                    // skip content, thought, status chunks
                 }
                 Err(e) => return Err(e.into()),
             }
         }
-        // info!("final_response: {:?}", final_response);
 
-        let content = CompletionResponseContent::Text(final_response);
-        let nresponse = CompletionResponse {
-            contents: vec![content],
-            id: self.get_agent_id().to_string(),
-            model: self.get_agent().model.clone(),
-            usage,
-            response_id: String::new(),
-        };
-
-        Ok(nresponse)
+        Err(HttpError::Other(
+            "Stream ended without final chunk".to_string(),
+        ))
     }
 
     /// Run the pipeline and stream status + content chunks to the caller.
@@ -263,7 +299,18 @@ impl Runnable for PipeLineAgent {
         turns: Vec<CompletionTurn>,
         prompt: &str,
         store: bool,
-    ) -> HttpResult<ReceiverStream<HttpResult<CompletionChunkResponse>>> {
+    ) -> HttpResult<ReceiverStream<HttpResult<TurnChunkResponse>>> {
+        info!(
+            _agent_id = %self.agent.id,
+            _max_tokens=?self.get_agent().max_tokens,
+            _pipeline_type = %self.pipeline_type,
+            _prompt=%prompt,
+            _reasoning_effort= ?self.get_agent().reasoning_effort,
+            _store=%store,
+            _temperature= ?self.get_agent().temperature,
+            _turns=?turns
+        );
+
         if self.pipeline_type == "deterministic" {
             self.execute_streaming_deterministic(turns, prompt, store)
                 .await
@@ -293,7 +340,7 @@ impl PipeLineAgent {
             pipeline_type,
             stages,
             subs,
-            usage: CompletionResponseTokenUsage::default(),
+            usage: TokenUsage::default(),
         }
     }
 
@@ -301,11 +348,11 @@ impl PipeLineAgent {
     ///
     /// Strips JSON fences before deserialisation. Returns [`HttpError::Other`] if the
     /// response contains no text or cannot be parsed as a valid [`StageDecision`].
-    pub fn build_decision(&self, response: &CompletionResponse) -> HttpResult<StageDecision> {
-        let content = response.text();
-        if let Some(val) = content {
-            trace!("val: {}", val);
-            let clean = &build_clean_json(val);
+    pub fn build_decision(&self, response: &AgentResponse) -> HttpResult<StageDecision> {
+        let content = response.content.clone();
+        if !content.is_empty() {
+            // trace!("val: {}", val);
+            let clean = &build_clean_json(&content);
 
             match serde_json::from_str::<StageDecision>(clean) {
                 Ok(decision) => Ok(decision),
@@ -356,7 +403,7 @@ impl PipeLineAgent {
         prompt: &str,
         response_id: Option<String>,
         store: bool,
-    ) -> Result<(CompletionResponse, StageDecision)> {
+    ) -> Result<(AgentResponse, StageDecision)> {
         let mut agent = self.get_agent().clone();
         agent.store = store;
         let messages = self.build_orchesrator_messages(turns, prompt);
@@ -375,17 +422,17 @@ impl PipeLineAgent {
         turns: Vec<CompletionTurn>,
         prompt: &str,
         store: bool,
-    ) -> HttpResult<ReceiverStream<HttpResult<CompletionChunkResponse>>> {
-        let (tx, rx) = mpsc::channel::<Result<CompletionChunkResponse, HttpError>>(200);
+    ) -> HttpResult<ReceiverStream<HttpResult<TurnChunkResponse>>> {
+        let (tx, rx) = mpsc::channel::<Result<TurnChunkResponse, HttpError>>(200);
         let self_clone = Arc::new(self.clone());
         let original_prompt = prompt.to_string();
-        let mut cusage = CompletionResponseTokenUsage::default();
+        let mut cusage = TokenUsage::default();
 
         tokio::spawn(
             async move {
                 let (_, last_response_id) = build_messages_from_turns(&turns);
 
-                let (_response, decision) = match self_clone
+                let (response, decision) = match self_clone
                     .execute_decide_streaming(
                         &turns,
                         &original_prompt.clone(),
@@ -398,6 +445,10 @@ impl PipeLineAgent {
                     Some(c) => c,
                     None => return,
                 };
+
+                let mut turn_response =
+                    TurnResponse::for_deterministic(original_prompt.clone(), response);
+                // turn_response.decision = Some(decision.clone());
 
                 let mut new_content = original_prompt.clone();
                 let length = self_clone.stages.len();
@@ -428,6 +479,13 @@ impl PipeLineAgent {
                         }
                     };
 
+                    // let turn_stage = TurnStage {
+                    //     name: stage.name.clone(),
+                    //     parallel: stage.parallel,
+                    //     decision: new_decision.clone(),
+                    //     turn_responses: Vec::new()
+                    // };
+
                     info!(
                         _agents= ?format_args!("{:#?}", new_decision.agents),
                         "Decision: {:?}", new_decision.execution
@@ -435,7 +493,10 @@ impl PipeLineAgent {
                     let start = std::time::Instant::now();
                     let status = build_decision_status(&new_decision);
                     let _ = tx
-                        .send(Ok(CompletionChunkResponse::status(status.clone())))
+                        .send(Ok(TurnChunkResponse::status(
+                            self_clone.get_agent_id().clone(),
+                            status.clone(),
+                        )))
                         .await;
 
                     // info!("Stage: {:?}", stage.name);
@@ -449,34 +510,52 @@ impl PipeLineAgent {
 
                         self_clone
                             .execute_synthesizer(
+                                &original_prompt,
                                 &new_decision,
                                 last_response_id.clone(),
                                 vec![turn],
                                 false,
+                                &mut turn_response,
                                 tx,
-                                cusage,
+                                cusage.clone(),
                             )
                             .await;
                         break;
                     } else {
-                        let (merged, sub_usage) =
-                            match self_clone.execute_subs(&new_decision, store).await {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    let error = format!("Executing sub agent error: {}", e);
-                                    error!(error);
-                                    let _ = tx.send(Err(HttpError::Other(error.to_string()))).await;
-                                    break;
-                                }
-                            };
+                        // let (merged, sub_usage) =
+                        let responses = match self_clone.execute_subs(&new_decision, store).await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                let error = format!("Executing sub agent error: {}", e);
+                                error!(error);
+                                let _ = tx.send(Err(HttpError::Other(error.to_string()))).await;
+                                break;
+                            }
+                        };
+
+                        let (merged, sub_usage) = merge_responses(&responses);
+
+                        let stage_response = StageResponse {
+                            responses,
+                            duration_ms: start.elapsed().as_millis() as u64,
+                            name: stage.name.clone(),
+                        };
+                        turn_response.add_stage(stage_response);
+
                         // info!("Merged: {:#?}", merged);
                         new_content = merged;
-                        cusage += sub_usage;
+                        // cusage += sub_usage;
+                        // turn_response.usage = cusage.clone();
                     }
 
                     let elapsed = start.elapsed();
                     let done = format!("  ✅ {:.1}s\n", elapsed.as_secs_f32());
-                    let _ = tx.send(Ok(CompletionChunkResponse::status(done))).await;
+                    let _ = tx
+                        .send(Ok(TurnChunkResponse::status(
+                            self_clone.get_agent_id().clone(),
+                            done,
+                        )))
+                        .await;
                 }
             }
             .instrument(tracing::Span::current()),
@@ -490,8 +569,8 @@ impl PipeLineAgent {
         turns: Vec<CompletionTurn>,
         prompt: &str,
         store: bool,
-    ) -> HttpResult<ReceiverStream<HttpResult<CompletionChunkResponse>>> {
-        let (tx, rx) = mpsc::channel::<Result<CompletionChunkResponse, HttpError>>(200);
+    ) -> HttpResult<ReceiverStream<HttpResult<TurnChunkResponse>>> {
+        let (tx, rx) = mpsc::channel::<Result<TurnChunkResponse, HttpError>>(200);
         let self_clone = Arc::new(self.clone());
         let original_turns = turns.clone();
         let original_prompt = prompt.to_string();
@@ -504,8 +583,9 @@ impl PipeLineAgent {
         tokio::spawn(async move {
             let mut iteration = 0;
             const MAX_ITERATIONS: usize = 10;
-            let mut usage = CompletionResponseTokenUsage::default();
+            let mut usage = TokenUsage::default();
             let mut pipeline_turns = Vec::new();
+            let mut turn_response = TurnResponse::for_dynamic(self_clone.get_agent_id().clone(),  original_prompt.clone());
 
             loop {
                 iteration += 1;
@@ -541,7 +621,7 @@ impl PipeLineAgent {
                 // set store to false after the first loop of the orchestrator.
                 store = false;
 
-                info!(
+                debug!(
                     _agents= ?format_args!("{:#?}", decision.agents),
                     "Decision: {:?} Stop: {}", decision.execution, decision.stop
                 );
@@ -564,16 +644,18 @@ impl PipeLineAgent {
 
                 let status = build_decision_status(&decision);
                 let _ = tx
-                    .send(Ok(CompletionChunkResponse::status(status.clone())))
+                    .send(Ok(TurnChunkResponse::status(self_clone.get_agent_id().to_string(), status.clone())))
                     .await;
 
                 if decision.stop {
-                    self_clone.execute_synthesizer(&decision, last_response_id, pipeline_turns, store, tx, usage).await;
+                    self_clone.execute_synthesizer(&original_prompt, &decision, last_response_id, pipeline_turns, store, &mut turn_response, tx, usage).await;
                     break;
                 }
 
                 let start = std::time::Instant::now();
-                let (merged, sub_usage) = match self_clone.execute_subs(&decision, store).await {
+                // let (merged, sub_usage) = 
+                let responses = 
+                match self_clone.execute_subs(&decision, store).await {
                     Ok(c) => c,
                     Err(e) => {
                         let error = format!("Executing sub agent error: {}", e);
@@ -582,9 +664,11 @@ impl PipeLineAgent {
                         break;
                     }
                 };
+                let (merged, sub_usage) = merge_responses(&responses);
+
                 let elapsed = start.elapsed();
                 let done = format!("  ✅ {:.1}s\n", elapsed.as_secs_f32());
-                let _ = tx.send(Ok(CompletionChunkResponse::status(done))).await;
+                let _ = tx.send(Ok(TurnChunkResponse::status(self_clone.get_agent_id().to_string(), done))).await;
 
                 info!(
                     "Merged: {:#?}", merged
@@ -612,8 +696,8 @@ impl PipeLineAgent {
         prompt: &str,
         last_response_id: Option<String>,
         store: bool,
-        tx: &Sender<Result<CompletionChunkResponse, HttpError>>,
-    ) -> Option<(CompletionResponse, StageDecision)> {
+        tx: &Sender<Result<TurnChunkResponse, HttpError>>,
+    ) -> Option<(AgentResponse, StageDecision)> {
         match self.decide(turns, prompt, last_response_id, store).await {
             Ok(c) => Some(c),
             Err(e) => {
@@ -641,9 +725,10 @@ impl PipeLineAgent {
         &self,
         decision: &StageDecision,
         store: bool,
-    ) -> Result<(String, CompletionResponseTokenUsage)> {
-        let mut responses: Vec<(String, CompletionResponse)> = Vec::new();
-
+    ) -> Result<Vec<TurnResponse>> {
+        // ) -> Result<(String, TokenUsage)> {
+        // let mut responses: Vec<(String, TurnResponse)> = Vec::new();
+        let mut responses = Vec::new();
         // execute the sub agents now.
         let subs = self.resolve_sub_agents(&decision.agents)?;
 
@@ -651,8 +736,9 @@ impl PipeLineAgent {
             ExecutionMode::Sequential => {
                 for sub in subs {
                     let response = sub.0.execute(Vec::new(), &sub.1, store).await?;
-                    debug!("Response: {:?}", response.text(),);
-                    responses.push((sub.0.get_agent_id().to_string(), response));
+                    responses.push(response);
+                    // debug!("Response: {:?}", response.content);
+                    // responses.push((sub.0.get_agent_id().to_string(), response));
                 }
             }
             ExecutionMode::Parallel => {
@@ -681,8 +767,12 @@ impl PipeLineAgent {
                 for result in results {
                     match result {
                         Ok(response) => {
-                            debug!("Agent: {} Response: {:?}", response.id, response.text());
-                            responses.push((response.id.clone(), response));
+                            debug!(
+                                "Agent: {} Response: {:?}",
+                                response.agent_id, response.content
+                            );
+                            // responses.push((response.agent_id.clone(), response));
+                            responses.push(response);
                         }
                         Err(e) => {
                             warn!("Agent call error: {}", e.to_string());
@@ -692,7 +782,8 @@ impl PipeLineAgent {
             }
         }
 
-        Ok(merge_responses(&responses))
+        // Ok(merge_responses(&responses))
+        Ok(responses)
     }
 
     #[tracing::instrument(
@@ -703,12 +794,14 @@ impl PipeLineAgent {
     )]
     async fn execute_synthesizer(
         &self,
+        prompt: &str,
         decision: &StageDecision,
         last_response_id: Option<String>,
         pipeline_turns: Vec<CompletionTurn>,
         store: bool,
-        tx: Sender<Result<CompletionChunkResponse, HttpError>>,
-        usage: CompletionResponseTokenUsage,
+        turn_response: &mut TurnResponse,
+        tx: Sender<Result<TurnChunkResponse, HttpError>>,
+        usage: TokenUsage,
     ) {
         let start = std::time::Instant::now();
 
@@ -744,9 +837,8 @@ impl PipeLineAgent {
 
         info!(
             _turns = format_args!("{:#?}", pipeline_turns),
-            "Synthesising..."
+            "Synthesizing..."
         );
-        let mut cusage = usage.clone();
         let synthesizer = subs[0].clone();
 
         let mut stream = match synthesizer
@@ -768,13 +860,13 @@ impl PipeLineAgent {
 
         // pipe synthesizer stream to tx
         let mut chunk_count = 0;
+        let agent_id = self.get_agent_id().clone();
+
         while let Some(chunk_result) = stream.next().await {
             if chunk_count == 0 {
+                let status = format!("  ✅ {:.1}s\n", start.elapsed().as_secs_f32());
                 let _ = tx
-                    .send(Ok(CompletionChunkResponse::status(format!(
-                        "  ✅ {:.1}s\n",
-                        start.elapsed().as_secs_f32()
-                    ))))
+                    .send(Ok(TurnChunkResponse::status(agent_id.clone(), status)))
                     .await;
             }
             chunk_count += 1;
@@ -788,26 +880,28 @@ impl PipeLineAgent {
                 }
             };
 
+            // info!("Turn Response: {:#?}", turn_response);
+
             trace!("Chunk: {:?}", chunk);
 
-            if chunk.is_final {
-                info!(_chunk = format_args!("{:#?}", chunk), "Synthesising done.");
+            if chunk.is_final() {
+                // extract the agent response from the final chunk
+                if let TurnChunkResponse::Final {
+                    response: synthesizer_response,
+                } = &chunk
+                {
+                    let final_response = synthesizer_response.clone();
+                    turn_response.set_synthesizer(final_response);
 
-                // let response_id = chunk.response_id.clone();
-                let mut final_chunk = chunk.clone();
-                final_chunk.is_final = false;
-                let _ = tx.send(Ok(final_chunk)).await;
+                    info!(
+                        _turn_response = format_args!("{:#?}", turn_response),
+                        "Synthesising done."
+                    );
 
-                cusage += chunk.usage.unwrap();
-
-                let _ = tx
-                    .send(Ok(CompletionChunkResponse::stop(
-                        self.get_agent_id().clone(),
-                        chunk.model,
-                        last_response_id.clone().unwrap_or_default(),
-                        Some(cusage.clone()),
-                    )))
-                    .await;
+                    let _ = tx
+                        .send(Ok(TurnChunkResponse::final_response(turn_response.clone())))
+                        .await;
+                }
             } else {
                 let _ = tx.send(Ok(chunk)).await;
             }

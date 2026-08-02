@@ -3,12 +3,11 @@ use std::sync::Arc;
 use tracing::info;
 
 use rustic_agent::{
-    AgentService,
+    AgentService, TokenUsage,
     agents::{
         domain::{AgentInput, CompletionTurn, LlmConfig},
         runner::Runnable,
     },
-    client::response::CompletionResponseTokenUsage,
     services::{
         config::agent::{CompletionStrategy, HistoryMode},
         registry::provider::ProviderRegistry,
@@ -34,7 +33,7 @@ pub async fn build_agent_runner(
         agent_id,
         llm_config,
         conversation.system_prompt.clone(),
-        false
+        false,
     );
 
     agent_service.build_runnable(&input).await
@@ -80,15 +79,14 @@ pub fn build_completion_turns(
 pub fn calculate_turn_cost(
     llm: &str,
     model: &str,
-    usage: &Option<CompletionResponseTokenUsage>,
+    usage: &Option<TokenUsage>,
     provider_registry: &ProviderRegistry,
 ) -> (f64, f64, f64, f64, f64) {
     if let Some(usage) = usage
         && let Some(provider) = provider_registry.find(llm)
         && let Some(model_config) = provider.clone().models.iter().find(|m| m.id == model)
     {
-        let input_tokens_cost =
-            (usage.input_tokens as f64 / 1_000_000.0) * model_config.input_cost;
+        let input_tokens_cost = (usage.input_tokens as f64 / 1_000_000.0) * model_config.input_cost;
         let cached_read_tokens_cost =
             (usage.cached_read_tokens as f64 / 1_000_000.0) * model_config.cached_read_cost;
         let cached_write_tokens_cost =

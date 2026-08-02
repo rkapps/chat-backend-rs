@@ -33,7 +33,7 @@ impl MCPServerConfig {
             name: self.name.clone(),
             url: self.url.clone(),
             api_key,
-            auth_header_name: self.auth_header_name.clone()
+            auth_header_name: self.auth_header_name.clone(),
         })
     }
 }

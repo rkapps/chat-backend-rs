@@ -41,8 +41,8 @@ pub use client::provider::Provider;
 pub use client::request::{CompletionRequest, ReasoningEffort};
 pub use client::response::{
     CompletionChunkResponse, CompletionResponse, CompletionResponseContent,
-    CompletionResponseTokenUsage,
 };
+pub use client::usage::TokenUsage;
 
 // Tool types
 pub use client::tools::{ToolCallRequest, ToolDefinition};

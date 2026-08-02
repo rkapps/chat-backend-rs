@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use rustic_agent::client::request::ReasoningEffort;
 use rustic_agent::{
     agents::Agent,
-    client::{message::Message, response::CompletionResponseContent},
+    client::message::Message,
     providers::gemini::{self, completion::GeminiClient},
     tools::{mcp::MCPRegistry, tool::ToolRegistry},
 };
@@ -46,18 +46,15 @@ async fn main() -> Result<()> {
         temperature: 0.7,
         tool_registry: Arc::new(ToolRegistry::new()),
         response_format_schema: None,
-        relay_tool_output: false
+        relay_tool_output: false,
     };
 
     let mut last_response_id = None;
     // Turn 1: ask Gemini to start the quiz
     let response = agent.complete(&messages, last_response_id).await?;
     last_response_id = Some(response.response_id);
-    let content = response.contents.get(0).unwrap();
-    if let CompletionResponseContent::Text(val) = content {
-        message = Message::assistant(val.to_string());
-        messages.push(message);
-    }
+    message = Message::assistant(response.content.to_string());
+    messages.push(message);
 
     // Turn 2: supply grade level, threading the same response_id so Gemini
     // continues the existing interaction rather than starting a new one.

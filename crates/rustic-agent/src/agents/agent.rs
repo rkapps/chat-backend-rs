@@ -1,23 +1,25 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
 use rustic_core::{HttpError, HttpResult};
 use serde_json::Value;
-use tokio::{
-    sync::{Semaphore, mpsc},
-    time::sleep,
-};
+use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Instrument, debug, error, info, trace};
 
 use crate::{
-    agents::helper::{merge_tool_output, unwrap_typed_value}, client::{
+    TokenUsage,
+    agents::{
+        domain::{AgentChunkResponse, AgentIteration, AgentResponse, AgentToolCall},
+        helper::{merge_tool_output, unwrap_typed_value},
+    },
+    client::{
         llm::LlmClient,
         message::Message,
         request::{CompletionRequest, ReasoningEffort},
-        response::{CompletionChunkResponse, CompletionResponse, CompletionResponseContent},
         tools::{ToolCallRequest, ToolDefinition},
-    }, tools::{mcp::MCPRegistry, tool::ToolRegistry},
+    },
+    tools::{mcp::MCPRegistry, tool::ToolRegistry},
 };
 
 /// Orchestrates LLM completion calls and tool dispatching for a single configured model.
@@ -63,6 +65,49 @@ pub struct Agent {
 }
 
 impl Agent {
+    /// Run an agentic tool-use loop and return the final [`CompletionResponse`].
+    ///
+    /// The loop repeats up to `MAX_ITERATIONS` times; a 2-second delay is inserted
+    /// after iteration 5 to back off from rate limits. Tool calls are executed
+    /// concurrently with a semaphore limiting parallelism to 3 and a 60-second
+    /// per-call timeout.
+    ///
+    /// Returns [`HttpError::MaxIterationsExceeded`] if the model keeps requesting
+    /// tools beyond the iteration cap.
+    ///
+    #[tracing::instrument(
+        skip(self, messages, last_response_id),
+        fields(
+            otel.name = %format!("complete agent: {}", self.id),
+x        )
+    )]
+    pub async fn complete(
+        &self,
+        messages: &[Message],
+        last_response_id: Option<String>,
+    ) -> HttpResult<AgentResponse> {
+        let stream = self
+            .complete_with_streaming(messages, last_response_id.clone())
+            .await?;
+        tokio::pin!(stream);
+
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(AgentChunkResponse::Final { response }) => {
+                    return Ok(response);
+                }
+                Ok(_) => {
+                    // skip content, thought, status chunks
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        Err(HttpError::Other(
+            "Stream ended without final chunk".to_string(),
+        ))
+    }
+
     /// Run an agentic tool-use loop, streaming output chunks to the caller.
     ///
     /// Spawns a background Tokio task that drives the loop and forwards
@@ -95,8 +140,8 @@ impl Agent {
         &self,
         messages: &[Message],
         last_response_id: Option<String>,
-    ) -> HttpResult<ReceiverStream<HttpResult<CompletionChunkResponse>>> {
-        let (tx, rx) = mpsc::channel::<Result<CompletionChunkResponse, HttpError>>(100);
+    ) -> HttpResult<ReceiverStream<HttpResult<AgentChunkResponse>>> {
+        let (tx, rx) = mpsc::channel::<Result<AgentChunkResponse, HttpError>>(100);
 
         //Get tool definitions
         let mut definitions: Vec<ToolDefinition> = self
@@ -133,10 +178,12 @@ impl Agent {
 
         tokio::spawn(
             async move {
-                let mut iteration = 0;
+                let mut iteration: usize = 0;
                 const MAX_ITERATIONS: usize = 10;
 
-                let mut usage = crate::client::response::CompletionResponseTokenUsage::default();
+                // collect iterations throughout the loop
+                let mut tracked_iterations: Vec<AgentIteration> = vec![];
+                let mut total_usage = TokenUsage::default();
 
                 debug!(
                     target: "agent-messages",
@@ -159,7 +206,7 @@ impl Agent {
                     );
                     let _enter = iter_span.enter();
                     iter_span.in_scope(|| {
-                        info!(
+                        debug!(
                         _iteration = %iteration,
                         _last_response_id = ?last_response_id,
                         _messages= ?iterations.get(&iteration),
@@ -202,15 +249,18 @@ impl Agent {
                         }
                     };
 
-                    let mut tool_calls = Vec::new();
-
+                    let mut tool_call_requests = Vec::new();
                     let mut model = String::new();
 
                     // Gemini sends partial thought tokens as random-looking characters; accumulate
                     // the full thought before appending it as a Thought message so the model receives
                     // a coherent block on the next turn.
                     let mut thought_content = String::new();
+                    let mut final_content = String::new();
                     let mut stream_error = false;
+                    let mut usage = TokenUsage::default();
+
+                    let start = std::time::Instant::now();
 
                     // 2. "Pump" the chunks through the channel as they arrive
                     while let Some(chunk_result) = llm_stream.next().await {
@@ -225,22 +275,21 @@ impl Agent {
                         };
                         if let Some(call) = chunk.tool_call {
                             debug!(agent= %agent_id, tool_call= ?call, "Tool Call");
-                            tool_calls.push(call);
+                            tool_call_requests.push(call);
                         } else {
-                            trace!(
-                                _chunk= ?chunk,
-                            );
-
                             if chunk.is_final {
                                 debug!(
                                     _chunk= ?chunk,
                                 );
 
-                                usage += chunk.usage.unwrap_or_default();
+                                usage = chunk.usage.unwrap_or_default();
                                 last_response_id = Some(chunk.response_id);
                                 model = chunk.model;
                             } else if !chunk.content.is_empty() {
-                                let _ = tx.send(Ok(chunk)).await;
+                                final_content.push_str(&chunk.content);
+                                let agent_chunk =
+                                    AgentChunkResponse::content(agent_id.clone(), chunk.content);
+                                let _ = tx.send(Ok(agent_chunk)).await;
                             } else if !chunk.thought.is_empty() {
                                 thought_content.push_str(&chunk.thought);
                                 // while antropic thoughts are text, gemini are random characters. we need to collect the thoughts because
@@ -251,19 +300,22 @@ impl Agent {
                         }
                     }
 
+                    total_usage += usage.clone();
+                    let mut tool_calls = Vec::new();
+
                     // break outer loop on stream error
                     if stream_error {
                         break;
                     }
 
                     iter_span.in_scope(|| {
-                        info!(
-                            _tool_calls= %tool_calls.len(),
+                        debug!(
+                            _tool_calls= %tool_call_requests.len(),
                             _new_response_id= ?last_response_id,
                         );
                     });
 
-                    if tool_calls.is_empty() {
+                    if tool_call_requests.is_empty() {
                         iter_span.in_scope(|| {
                             info!(
                                 _usage= %format_args!("{:#?}", usage),
@@ -271,17 +323,33 @@ impl Agent {
                             );
                         });
 
+                        let agent_iteration = AgentIteration {
+                            iteration: iteration as u32,
+                            duration_ms: start.elapsed().as_millis() as u64,
+                            finish_reason: String::new(),
+                            response_id: last_response_id.clone().unwrap_or_default(),
+                            tool_calls: tool_calls,
+                            usage: usage.clone(),
+                        };
+                        tracked_iterations.push(agent_iteration);
+
+                        let duration_ms = start.elapsed().as_millis() as u64;
+                        let agent_response = AgentResponse {
+                            agent_id: agent_id.clone(),
+                            content: final_content,
+                            model,
+                            response_id: last_response_id.clone().unwrap_or_default(),
+                            iterations: tracked_iterations,
+                            usage: total_usage,
+                            duration_ms,
+                        };
+
                         let _ = tx
-                            .send(Ok(CompletionChunkResponse::stop(
-                                agent_id.clone(),
-                                model,
-                                last_response_id.clone().unwrap_or_default(),
-                                Some(usage),
-                            )))
+                            .send(Ok(AgentChunkResponse::final_response(agent_response)))
                             .await;
                         break;
                     }
-                    let tool_futures: Vec<_> = tool_calls
+                    let tool_futures: Vec<_> = tool_call_requests
                         .into_iter()
                         .map(|call| {
                             let span = tracing::info_span!(
@@ -296,10 +364,9 @@ impl Agent {
                         .collect();
 
                     let _ = tx
-                        .send(Ok(CompletionChunkResponse::content(
+                        .send(Ok(AgentChunkResponse::content(
                             agent_id.clone(),
                             String::new(),
-                            "Executing tools...".into(),
                         )))
                         .await;
 
@@ -316,16 +383,45 @@ impl Agent {
                     let mut merged = serde_json::Map::new();
                     for result in results {
                         match result {
-                            Ok((tool_call, tool_output)) => {
-                                nmessages.push(tool_call);
+                            Ok((tool_name, tool_call, tool_output)) => {
+                                let duration_ms = start.elapsed().as_millis() as u64;
+
+                                nmessages.push(tool_call.clone());
                                 nmessages.push(tool_output.clone());
                                 merge_tool_output(&mut merged, &tool_output);
 
-                                // if let Message::ToolOutput { output, .. } = &tool_output {
-                                //     if let Value::Object(map) = output {
-                                //         merged.extend(map.clone());
-                                //     }                               
-                                // }
+                                // extract input from ToolCall message
+                                let input = if let Message::ToolCall { arguments, .. } = &tool_call
+                                {
+                                    serde_json::from_str(arguments)
+                                        .unwrap_or(Value::String(arguments.clone()))
+                                } else {
+                                    Value::Null
+                                };
+
+                                // extract output from ToolOutput message
+                                let output =
+                                    if let Message::ToolOutput { output, .. } = &tool_output {
+                                        Some(output.clone())
+                                    } else {
+                                        None
+                                    };
+
+                                // extract call_id
+                                let call_id = if let Message::ToolCall { call_id, .. } = &tool_call
+                                {
+                                    call_id.clone()
+                                } else {
+                                    String::new()
+                                };
+                                tool_calls.push(AgentToolCall {
+                                    duration_ms,
+                                    error: None,
+                                    id: call_id,
+                                    name: tool_name,
+                                    input,
+                                    output: output,
+                                })
                             }
                             Err(e) => {
                                 error!(
@@ -337,36 +433,51 @@ impl Agent {
                     }
 
                     iter_span.in_scope(|| {
-                        info!(
+                        debug!(
                             _new_messages= ?nmessages.len(),
                         );
                     });
+                    let agent_iteration = AgentIteration {
+                        iteration: iteration as u32,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                        finish_reason: String::new(),
+                        response_id: last_response_id.clone().unwrap_or_default(),
+                        tool_calls: tool_calls,
+                        usage: usage.clone(),
+                    };
+                    tracked_iterations.push(agent_iteration);
 
                     if relay_tool_output {
                         match serde_json::to_string(&merged) {
                             Ok(c) => {
+                                iter_span.in_scope(|| {
+                                    debug!(
+                                        relay_tool_output_response= %format_args!("{:#?}", c),
+                                        usage= %format_args!("{:#?}", usage),
+                                        "Response Stats final"
+                                    );
+                                });
 
-                            iter_span.in_scope(|| {
-                                info!(
-                                    relay_tool_output_response= %format_args!("{:#?}", c),
-                                    usage= %format_args!("{:#?}", usage),
-                                    "Response Stats final"
-                                );
-                            });
-        
-                            let chunk = CompletionChunkResponse::content(agent_id.clone(), c, String::new());
-                            let _ = tx.send(Ok(chunk)).await;
-                            let _ = tx
-                                .send(Ok(CompletionChunkResponse::stop(
-                                    agent_id.clone(),
+                                let chunk =
+                                    AgentChunkResponse::content(agent_id.clone(), c.clone());
+                                let _ = tx.send(Ok(chunk)).await;
+
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                let agent_response = AgentResponse {
+                                    agent_id: agent_id.clone(),
+                                    content: c,
                                     model,
-                                    last_response_id.clone().unwrap_or_default(),
-                                    Some(usage),
-                                )))
-                                .await;
-                            break;
+                                    response_id: last_response_id.clone().unwrap_or_default(),
+                                    iterations: tracked_iterations,
+                                    usage: total_usage,
+                                    duration_ms,
+                                };
 
-                            },
+                                let _ = tx
+                                    .send(Ok(AgentChunkResponse::final_response(agent_response)))
+                                    .await;
+                                break;
+                            }
                             Err(_) => todo!(),
                         };
                     }
@@ -382,298 +493,15 @@ impl Agent {
         Ok(ReceiverStream::new(rx))
     }
 
-    /// Run an agentic tool-use loop and return the final [`CompletionResponse`].
-    ///
-    /// The loop repeats up to `MAX_ITERATIONS` times; a 2-second delay is inserted
-    /// after iteration 5 to back off from rate limits. Tool calls are executed
-    /// concurrently with a semaphore limiting parallelism to 3 and a 60-second
-    /// per-call timeout.
-    ///
-    /// Returns [`HttpError::MaxIterationsExceeded`] if the model keeps requesting
-    /// tools beyond the iteration cap.
-    ///
-    #[tracing::instrument(
-        skip(self, messages, last_response_id),
-        fields(
-            otel.name = %format!("complete agent: {}", self.id),
-            _last_response_id = ?last_response_id,
-            _max_tokens = %self.max_tokens,
-            _messages.count = %messages.len(),
-            _model = %self.model,
-            _provider = %self.llm,
-            _reasoning_effort= ?self.reasoning_effort,
-            _relay_tool_output= %self.relay_tool_output,           
-            _store = %self.store,
-            _temperature = %self.temperature,
-        )
-    )]
-    pub async fn complete(
-        &self,
-        messages: &[Message],
-        last_response_id: Option<String>,
-    ) -> HttpResult<CompletionResponse> {
-
-        let mut definitions: Vec<ToolDefinition> = self
-            .tool_registry
-            .get_tools()
-            .iter()
-            .map(|e| ToolDefinition::from_tool(e.as_ref()))
-            .collect();
-
-        debug!("Current messages: {:?}", messages);
-        trace!(
-            target: "agent-tool",
-            "Tool definitions: {:?}", definitions
-        );
-
-        let mcp_definitions = self.mcp_registry.definitions.clone();
-
-        trace!(
-            target: "agent-tool",
-            "Mcp_definitions: {:?}", mcp_definitions
-        );
-
-        mcp_definitions
-            .iter()
-            .for_each(|e| definitions.push(e.1.clone()));
-
-        let mut last_response_id = last_response_id.clone();
-        let mut iterations = HashMap::new();
-        let relay_tool_output = self.relay_tool_output;
-
-        let request = CompletionRequest {
-            id: self.id.clone(),
-            provider: self.llm.clone(),
-            model: self.model.clone(),
-            system: self.system_prompt.clone(),
-            messages: messages.to_vec(),
-            iterations: iterations.clone(),
-            temperature: self.temperature,
-            max_tokens: self.max_tokens,
-            stream: false,
-            store: self.store,
-            reasoning_effort: self.reasoning_effort.clone(),
-            enable_cache: self.enable_cache,
-            definitions,
-            last_response_id: None,
-            response_format_schema: self.response_format_schema.clone(),
-        };
-
-        const MAX_ITERATIONS: usize = 10;
-        let mut iteration = 0;
-
-        let mut nrequest = request;
-        let delay = Duration::from_millis(2000);
-        let agent_id = self.id.clone();
-
-        loop {
-            let iter_span = tracing::span!(
-                    tracing::Level::INFO,
-                    "iteration",
-                    otel.name = format!("iteration: {}", iteration),  // ← OTel specific attribute that overrides span name
-                    n = %iteration,
-                    _last_response_id = ?last_response_id,
-                    _messages= format_args!("{:#?}", messages),
-                    _iterations= format_args!("{:#?}", iterations.get(&iteration)),
-            );
-            // let _enter = iter_span.enter();
-
-            iteration += 1;
-            if iteration > 5 {
-                sleep(delay).await;
-            }
-
-            if iteration > MAX_ITERATIONS {
-                iter_span.in_scope(|| {
-                    error!(
-                        "Agent: {}, Max tool iterations exceeded: {}",
-                        agent_id, iteration
-                    );
-                });
-
-                return Err(HttpError::MaxIterationsExceeded);
-            }
-
-            iter_span.in_scope(|| {
-                trace!("CompletionRequest: {:#?}", nrequest);
-            });
-
-            // Call the llm with the request
-            nrequest.last_response_id = last_response_id.clone();
-            nrequest.iterations = iterations.clone();
-
-            let response = self
-                .client
-                .complete(nrequest.clone())
-                // .instrument(tracing::Span::current())
-                .instrument(tracing::info_span!(
-                    parent: &iter_span,
-                    "provider.complete",
-                    otel.name = format!("provider: {}", nrequest.model),
-                    _model = %nrequest.model,
-                    _store = %nrequest.store,
-                ))
-                .await?;
-            last_response_id = Some(response.response_id.clone());
-
-            // Get the tools
-            let tool_calls: Vec<&ToolCallRequest> = response
-                .contents
-                .iter()
-                .filter_map(|c| {
-                    if let CompletionResponseContent::ToolCall(call) = c {
-                        Some(call)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            iter_span.in_scope(|| {
-                info!(
-                    _new_response_id= ?last_response_id,
-                    "Tool calls: {}", tool_calls.len()
-                );
-            });
-
-            if tool_calls.is_empty() {
-                iter_span.in_scope(|| {
-                    info!(
-                        response= %format_args!("{:#?}", response.text() ),
-                        usage= %format_args!("{:#?}", response.usage),
-                        "Response Stats final"
-                    );
-                });
-
-                return Ok(response); // Done - return final answer
-            }
-
-            iter_span.in_scope(|| {
-                trace!("CompletionResponse: {:#?}", response);
-            });
-
-            let thoughts: Vec<Message> = response
-                .contents
-                .iter()
-                .filter_map(|c| {
-                    if let CompletionResponseContent::Thought(text) = c {
-                        Some(Message::Thought {
-                            content: text.clone(),
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            // setting permits to 10 - multiple agents can be running multiple tools parallely
-            let semaphore = Arc::new(Semaphore::new(10)); // max 3 parallel
-
-            let tool_futures: Vec<_> = tool_calls
-                .into_iter()
-                .map(|call| {
-                    let sem = semaphore.clone();
-                    let timeout_duration = Duration::from_secs(60);
-                    let span = tracing::info_span!(
-                        parent: &iter_span,
-                        "tool.execute",
-                        otel.name = format!("tool: {}", call.name),
-                        _tool = %call.name,
-                        _call_id = %call.id,
-                    );
-
-                    async move {
-                        let _permit = sem.acquire().await.unwrap();
-                        match tokio::time::timeout(
-                            timeout_duration,
-                            self.execute_tool_call(call.clone()),
-                        )
-                        .await
-                        {
-                            Ok(result) => result,
-                            Err(_) => Err(anyhow::anyhow!("Timeout: {}", call.name)),
-                        }
-                    }
-                    .instrument(span)
-                })
-                .collect();
-
-            let results = futures::future::join_all(tool_futures).await;
-
-            //Add thoughts to the messages first
-            let mut nmessages: Vec<Message> = Vec::new();
-            nmessages.extend(thoughts);
-
-            // for relay_tool_output get the merged json
-            let mut merged = serde_json::Map::new();
-
-            for result in results {
-                match result {
-                    Ok((tool_call, tool_output)) => {
-                        nmessages.push(tool_call);
-                        nmessages.push(tool_output.clone());
-
-                        merge_tool_output(&mut merged, &tool_output);
-                    }
-                    Err(e) => {
-                        iter_span.in_scope(|| {
-                            error!(target: "agent-tool", agent= %agent_id, error= ?e, "Tool Call Error");
-                        });
-                    }
-                };
-            }
-
-            iter_span.in_scope(|| {
-                info!(
-                    _last_response_id = ?last_response_id,
-                    _merged=?merged,
-                    _new_messages= ?nmessages.len(),
-                    _relay_tool_output= %relay_tool_output
-                );
-            });
-
-            if relay_tool_output {
-                match serde_json::to_string(&merged) {
-                    Ok(c) => {
-                        let content = CompletionResponseContent::Text(c);
-                        let nresponse = CompletionResponse{
-                            contents: vec![content],
-                            id: agent_id,
-                            model: response.model,
-                            usage: response.usage,
-                            response_id: last_response_id.unwrap_or_default()
-                        };
-
-                        iter_span.in_scope(|| {
-                            info!(
-                                relay_tool_output_response= %format_args!("{:#?}", nresponse.text() ),
-                                usage= %format_args!("{:#?}", nresponse.usage),
-                                "Response Stats final"
-                            );
-                        });
-        
-                        return Ok(nresponse)
-                    },
-                    Err(e) => {
-                        iter_span.in_scope(|| {
-                            error!(target: "agent-tool", agent= %agent_id, error= ?e, "Tool Call Error");
-                        });
-                    }                };
-            }
-
-
-            if !nmessages.is_empty() {
-                iterations.insert(iteration, nmessages);
-            }
-        }
-    }
-
     /// Dispatch a single tool call and return the resulting `(ToolCall, ToolOutput)` message pair.
     ///
     /// Resolution order: local [`ToolRegistry`] first, then [`MCPRegistry`]. If the tool is not
     /// found in either registry a JSON error payload is returned to the model so it can recover
     /// gracefully rather than crashing the loop.
-    async fn execute_tool_call(&self, call: ToolCallRequest) -> anyhow::Result<(Message, Message)> {
+    async fn execute_tool_call(
+        &self,
+        call: ToolCallRequest,
+    ) -> anyhow::Result<(String, Message, Message)> {
         let tool_call_message = Message::ToolCall {
             call_id: call.id.clone(),
             arguments: call.arguments.to_string(),
@@ -731,6 +559,8 @@ impl Agent {
 
         debug!(
             target: "agent-tool",
+            _name= ?call.name.clone(),
+            _input=?call.arguments,
             _output= format_args!("{:?}", serde_json::to_string_pretty(&output)),
             "Tool output: {:?}", call.name
         );
@@ -741,6 +571,6 @@ impl Agent {
             name: call.name.clone(),
         };
 
-        Ok((tool_call_message, tool_output_message))
+        Ok((call.name.clone(), tool_call_message, tool_output_message))
     }
 }

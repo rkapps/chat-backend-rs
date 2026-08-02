@@ -2,13 +2,10 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures_util::Stream;
-use rustic_core::HttpResult;
+use rustic_core::{HttpError, HttpResult};
 use serde::Serialize;
 
-use crate::client::{
-    request::CompletionRequest,
-    response::{CompletionChunkResponse, CompletionResponse},
-};
+use crate::{CompletionChunkResponse, CompletionResponse, client::request::CompletionRequest};
 
 /// A pinned, heap-allocated stream of [`CompletionChunkResponse`] items yielded by a streaming
 /// completion call. Each item is wrapped in [`HttpResult`] to propagate transport-level errors
@@ -23,10 +20,27 @@ pub type CompletionStreamResponse =
 #[async_trait]
 pub trait LlmClient: Send + Sync + std::fmt::Debug {
     /// Send a completion request and wait for the full response.
-    ///
-    /// Returns a [`CompletionResponse`] containing the model's reply, or an [`HttpResult`] error
-    /// if the underlying request fails.
-    async fn complete(&self, request: CompletionRequest) -> HttpResult<CompletionResponse>;
+    /// Default implementation drives the stream and collects the Final chunk.
+    async fn complete(&self, request: CompletionRequest) -> HttpResult<CompletionResponse> {
+        use futures_util::StreamExt;
+
+        let mut stream = self.complete_with_stream(request).await?;
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if chunk.is_final {
+                return chunk.completion.ok_or_else(|| {
+                    rustic_core::HttpError::Other(
+                        "Final chunk missing CompletionResponse".to_string(),
+                    )
+                });
+            }
+        }
+
+        Err(HttpError::Other(
+            "Stream ended without final chunk".to_string(),
+        ))
+    }
 
     /// Send a completion request and receive the response as a stream of chunks.
     ///

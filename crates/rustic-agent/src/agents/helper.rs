@@ -9,8 +9,8 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::{
-    CompletionResponse, CompletionResponseTokenUsage, Message,
-    agents::domain::{CompletionTurn, ExecutionMode, StageDecision},
+    Message, TokenUsage,
+    agents::domain::{CompletionTurn, ExecutionMode, StageDecision, TurnResponse},
 };
 
 /// Build a human-readable status string from an orchestrator decision for display in the stream.
@@ -61,15 +61,14 @@ pub fn build_pipeline_input(original_messages: &[Message]) -> Vec<Message> {
 /// Each entry is keyed by `agent_id`. The response text is parsed as JSON if possible;
 /// otherwise it is stored as a JSON string. The merged object is serialised back to a string
 /// for inclusion in the next orchestrator turn.
-pub fn merge_responses(
-    responses: &[(String, CompletionResponse)],
-) -> (String, CompletionResponseTokenUsage) {
+pub fn merge_responses(responses: &[TurnResponse]) -> (String, TokenUsage) {
     let mut merged = serde_json::Map::new();
-    let mut total_usage = CompletionResponseTokenUsage::default();
+    let mut total_usage = TokenUsage::default();
 
-    for (agent_id, response) in responses {
-        let content = response.text().unwrap_or_default();
-        let content = build_clean_json(content);
+    for response in responses {
+        let agent_id = response.agent_id.clone();
+        let content = response.content.clone();
+        let content = build_clean_json(&content);
         let value: Value =
             serde_json::from_str(&content).unwrap_or(Value::String(content.to_string()));
         merged.insert(agent_id.clone(), value);
@@ -191,7 +190,6 @@ pub fn merge_tool_output(merged: &mut serde_json::Map<String, Value>, tool_outpu
         }
     }
 }
-
 
 pub fn extract_json_object(response: &str) -> Result<&str> {
     let start = response.find('{').ok_or_else(|| {
