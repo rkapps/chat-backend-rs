@@ -31,8 +31,8 @@ enum AdminCommands {
         #[arg(short, long)]
         symbols: Option<String>,
         #[arg(short, long)]
-        update: Option<bool>
-    }
+        update: Option<bool>,
+    },
 }
 
 #[tokio::main]

@@ -269,12 +269,6 @@ impl TurnResponse {
                 "stages": stages.iter().map(|s| serde_json::json!({
                     "name": s.name,
                     "duration_ms": s.duration_ms,
-                    // "usage": {
-                    //     "input_tokens": s.usage.input_tokens,
-                    //     "output_tokens": s.usage.output_tokens,
-                    //     "reasoning_tokens": s.usage.reasoning_tokens,
-                    //     "total_tokens": s.usage.total_tokens,
-                    // },
                     "responses": s.responses.iter().map(|r| serde_json::json!({
                         "agent_id": r.agent_id,
                         "prompt": truncate(&r.prompt, 100),

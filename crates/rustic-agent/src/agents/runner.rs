@@ -261,7 +261,7 @@ impl Runnable for PipeLineAgent {
                 Ok(_) => {
                     // skip content, thought, status chunks
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e),
             }
         }
 
@@ -426,7 +426,6 @@ impl PipeLineAgent {
         let (tx, rx) = mpsc::channel::<Result<TurnChunkResponse, HttpError>>(200);
         let self_clone = Arc::new(self.clone());
         let original_prompt = prompt.to_string();
-        let mut cusage = TokenUsage::default();
 
         tokio::spawn(
             async move {
@@ -479,12 +478,6 @@ impl PipeLineAgent {
                         }
                     };
 
-                    // let turn_stage = TurnStage {
-                    //     name: stage.name.clone(),
-                    //     parallel: stage.parallel,
-                    //     decision: new_decision.clone(),
-                    //     turn_responses: Vec::new()
-                    // };
 
                     info!(
                         _agents= ?format_args!("{:#?}", new_decision.agents),
@@ -517,7 +510,6 @@ impl PipeLineAgent {
                                 false,
                                 &mut turn_response,
                                 tx,
-                                cusage.clone(),
                             )
                             .await;
                         break;
@@ -533,7 +525,7 @@ impl PipeLineAgent {
                             }
                         };
 
-                        let (merged, sub_usage) = merge_responses(&responses);
+                        let (merged, _sub_usage) = merge_responses(&responses);
 
                         let stage_response = StageResponse {
                             responses,
@@ -648,13 +640,13 @@ impl PipeLineAgent {
                     .await;
 
                 if decision.stop {
-                    self_clone.execute_synthesizer(&original_prompt, &decision, last_response_id, pipeline_turns, store, &mut turn_response, tx, usage).await;
+                    self_clone.execute_synthesizer(&original_prompt, &decision, last_response_id, pipeline_turns, store, &mut turn_response, tx).await;
                     break;
                 }
 
                 let start = std::time::Instant::now();
                 // let (merged, sub_usage) = 
-                let responses = 
+                let responses =
                 match self_clone.execute_subs(&decision, store).await {
                     Ok(c) => c,
                     Err(e) => {
@@ -801,7 +793,6 @@ impl PipeLineAgent {
         store: bool,
         turn_response: &mut TurnResponse,
         tx: Sender<Result<TurnChunkResponse, HttpError>>,
-        usage: TokenUsage,
     ) {
         let start = std::time::Instant::now();
 

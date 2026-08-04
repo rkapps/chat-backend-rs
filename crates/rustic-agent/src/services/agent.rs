@@ -201,7 +201,7 @@ impl AgentService {
         let agent = self
             .builder(&agent_config.id)
             .with_system_prompt(system_prompt.unwrap_or_default())
-            .with_relay_tool_output(relay_tool_output.clone())
+            .with_relay_tool_output(*relay_tool_output)
             .with_response_format_schema(response_format_schema.clone())
             .with_tools(tool_registry.get_tools())
             .with_filtered_mcp(mcp_registry)

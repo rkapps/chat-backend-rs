@@ -1,5 +1,3 @@
-use std::fmt;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -78,15 +76,3 @@ pub struct AgentToolCall {
     pub error: Option<String>,
     pub duration_ms: u64,
 }
-
-// impl fmt::Display for AgentResponse {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         write!(f, "AgentResponse {{ agent: {}, model: {}, duration: {}ms, usage: {}, iterations: {} }}",
-//             self.agent_id,
-//             self.model,
-//             self.duration_ms,
-//             self.usage,
-//             self.iterations.len()
-//         )
-//     }
-// }

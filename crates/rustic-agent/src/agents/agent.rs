@@ -99,7 +99,7 @@ x        )
                 Ok(_) => {
                     // skip content, thought, status chunks
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e),
             }
         }
 
@@ -174,7 +174,7 @@ x        )
         let messages = messages.to_vec();
         let mut last_response_id = last_response_id.clone();
         let mut iterations = HashMap::new();
-        let relay_tool_output = self.relay_tool_output.clone();
+        let relay_tool_output = self.relay_tool_output;
 
         tokio::spawn(
             async move {
@@ -328,7 +328,7 @@ x        )
                             duration_ms: start.elapsed().as_millis() as u64,
                             finish_reason: String::new(),
                             response_id: last_response_id.clone().unwrap_or_default(),
-                            tool_calls: tool_calls,
+                            tool_calls,
                             usage: usage.clone(),
                         };
                         tracked_iterations.push(agent_iteration);
@@ -420,7 +420,7 @@ x        )
                                     id: call_id,
                                     name: tool_name,
                                     input,
-                                    output: output,
+                                    output,
                                 })
                             }
                             Err(e) => {
@@ -442,7 +442,7 @@ x        )
                         duration_ms: start.elapsed().as_millis() as u64,
                         finish_reason: String::new(),
                         response_id: last_response_id.clone().unwrap_or_default(),
-                        tool_calls: tool_calls,
+                        tool_calls,
                         usage: usage.clone(),
                     };
                     tracked_iterations.push(agent_iteration);

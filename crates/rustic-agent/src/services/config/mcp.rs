@@ -1,6 +1,6 @@
 use anyhow::{self, Result};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::debug;
 
 use crate::tools::mcp::MCPServerSetting;
 

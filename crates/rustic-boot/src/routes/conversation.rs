@@ -214,39 +214,33 @@ pub async fn send_turn_streaming_handler(
         async move {
             match chunk_result {
                 Ok(chunk) => {
-                    match &chunk {
-                        TurnChunkResponse::Final { response } => {
-                            // already handled above — send done event
-                            let turn_response = response.clone();
-                            info!("Turn Response: {}", turn_response);
-                            let elapsed = start.elapsed();
-                            match conversation_service
-                                .save_turn(
-                                    &uid,
-                                    &id,
-                                    request.prompt,
-                                    turn_response.content.clone(),
-                                    turn_response.response_id.clone(),
-                                    Some(turn_response.usage.clone()),
-                                    Some(elapsed.as_millis() as u64),
-                                )
-                                .await
-                            {
-                                Ok(c) => c,
-                                // ❌ Don't silently swallow errors
-                                Err(e) => {
-                                    error!("Failed to save turn: {}", e);
-                                    // emit error event to UI
-                                    return Ok(Event::default()
-                                        .data(format!(
-                                            "{{\"error\": \"Failed to save turn: {}\"}}",
-                                            e
-                                        ))
-                                        .event("error"));
-                                }
-                            };
-                        }
-                        _ => {}
+                    if let TurnChunkResponse::Final { response } = &chunk {
+                        // already handled above — send done event
+                        let turn_response = response.clone();
+                        info!("Turn Response: {}", turn_response);
+                        let elapsed = start.elapsed();
+                        match conversation_service
+                            .save_turn(
+                                &uid,
+                                &id,
+                                request.prompt,
+                                turn_response.content.clone(),
+                                turn_response.response_id.clone(),
+                                Some(turn_response.usage.clone()),
+                                Some(elapsed.as_millis() as u64),
+                            )
+                            .await
+                        {
+                            Ok(c) => c,
+                            // ❌ Don't silently swallow errors
+                            Err(e) => {
+                                error!("Failed to save turn: {}", e);
+                                // emit error event to UI
+                                return Ok(Event::default()
+                                    .data(format!("{{\"error\": \"Failed to save turn: {}\"}}", e))
+                                    .event("error"));
+                            }
+                        };
                     }
 
                     let ui_chunk = UiChunk::from(&chunk);
