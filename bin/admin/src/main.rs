@@ -1,11 +1,12 @@
 use anyhow::Result;
+use bin_shared::get_finance_writer_service;
 use rustic_admin::finance::load_tickers;
 use rustic_boot::schema::update_rustic_platform;
 use rustic_core::set_logger;
 use rustic_economic::schema::update_economic_db;
 use rustic_finance::schema::update_finance_db;
 use std::{env, path::PathBuf};
-use tracing::info;
+use tracing::{error, info};
 
 use clap::{Parser, Subcommand};
 
@@ -26,6 +27,12 @@ enum AdminCommands {
     UpdateEconomicSchema,
     UpdateFinanceSchema,
     UpdatePlatformSchema,
+    UpdateTickersEOD {
+        #[arg(short, long)]
+        symbols: Option<String>,
+        #[arg(short, long)]
+        update: Option<bool>
+    }
 }
 
 #[tokio::main]
@@ -63,6 +70,17 @@ async fn main() -> Result<()> {
         }
         AdminCommands::UpdatePlatformSchema => {
             update_rustic_platform(&mongo_uri, &rustic_platform_mongo_db).await?;
+        }
+        AdminCommands::UpdateTickersEOD { symbols, update } => {
+            let symbols_str = symbols.as_deref().unwrap_or("");
+            let update = update.is_none();
+            info!("Tickers EOD PipeLine started...");
+
+            let service = get_finance_writer_service(&mongo_uri).await?;
+            match service.update_eod_tickers(symbols_str, update).await {
+                Ok(_) => info!("Tickers EOD update completed successfully."),
+                Err(e) => error!("Tickers EOD update failed: {:?}", e),
+            }
         }
     }
 
