@@ -1,5 +1,6 @@
 use anyhow::{self, Result};
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use crate::tools::mcp::MCPServerSetting;
 
@@ -28,6 +29,7 @@ impl MCPServerConfig {
     pub fn to_core_config(&self) -> Result<MCPServerSetting> {
         let api_key = std::env::var(&self.api_key_env)
             .map_err(|_| anyhow::anyhow!("Env var {} not set", self.api_key_env))?;
+        debug!("api_key {:?} : {:?}", self.api_key_env, api_key);
 
         Ok(MCPServerSetting {
             name: self.name.clone(),
