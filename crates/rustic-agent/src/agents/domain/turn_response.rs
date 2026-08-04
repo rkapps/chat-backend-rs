@@ -372,6 +372,7 @@ fn agent_json(response: &AgentResponse) -> serde_json::Value {
             "tool_calls": i.tool_calls.iter().map(|t| serde_json::json!({
                 "name": t.name,
                 "input": t.input,
+                "output": t.output,
                 "duration_ms": t.duration_ms,
                 "error": t.error,
             })).collect::<Vec<_>>(),
