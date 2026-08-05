@@ -15,11 +15,16 @@ pub fn clean_content(s: &str) -> String {
     }
 }
 
+
 pub fn truncate(s: &str, max: usize) -> String {
     let s = clean_content(s);
     if s.len() <= max {
-        s
-    } else {
-        format!("{}...", &s[..max])
+        return s;
     }
+    // Snap down to the nearest char boundary at or below `max`
+    let mut idx = max;
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    format!("{}...", &s[..idx])
 }

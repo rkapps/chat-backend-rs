@@ -317,7 +317,7 @@ x        )
 
                     if tool_call_requests.is_empty() {
                         iter_span.in_scope(|| {
-                            info!(
+                            debug!(
                                 _usage= %format_args!("{:#?}", usage),
                                 "Response: {}", model
                             );

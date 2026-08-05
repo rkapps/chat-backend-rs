@@ -466,7 +466,10 @@ impl PipeLineAgent {
                             .iter()
                             .map(|s| AgentGoal {
                                 id: s.id.clone(),
-                                goal: Some("Decide on the next action".to_string()),
+                                goal: Some(format!(
+                                    "{}\n\nFiscal Context from previous stage:\n{}",
+                                    original_prompt, new_content
+                                )),
                             })
                             .collect();
 
@@ -477,7 +480,6 @@ impl PipeLineAgent {
                             reasoning: None,
                         }
                     };
-
 
                     info!(
                         _agents= ?format_args!("{:#?}", new_decision.agents),
@@ -534,7 +536,7 @@ impl PipeLineAgent {
                         };
                         turn_response.add_stage(stage_response);
 
-                        // info!("Merged: {:#?}", merged);
+                        info!("Merged: {:#?}", merged);
                         new_content = merged;
                         // cusage += sub_usage;
                         // turn_response.usage = cusage.clone();
