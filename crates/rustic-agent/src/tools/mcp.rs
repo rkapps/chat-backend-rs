@@ -4,7 +4,7 @@ use rustic_core::HttpClient;
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::{
     client::{
@@ -66,7 +66,7 @@ impl MCPRegistry {
         &mut self,
         setting: MCPServerSetting,
     ) -> Result<Vec<ToolDefinition>> {
-        let adapter = Box::new(StandardAdapter {});
+        let adapter = Arc::new(StandardAdapter {});
         self.register_server_with_adapter(setting, adapter).await
     }
 
@@ -77,7 +77,7 @@ impl MCPRegistry {
     pub async fn register_server_with_adapter(
         &mut self,
         setting: MCPServerSetting,
-        adapter: Box<dyn MCPServerAdapter>,
+        adapter: Arc<dyn MCPServerAdapter>,
     ) -> Result<Vec<ToolDefinition>> {
         // add code to check if server already inserted
         let client =
@@ -115,7 +115,7 @@ impl MCPRegistry {
                 &mcp_get_definition.description.unwrap(),
                 mcp_get_definition.input_schema,
             );
-            self.definitions.insert(name, tool_definition.clone());
+            self.definitions.insert(name.to_owned(), tool_definition.clone());
 
             Ok(tool_definition)
         } else {
@@ -178,20 +178,20 @@ pub struct MCPClient {
     pub url: String,
     pub api_key: String,
     http_client: HttpClient,
-    server_adapter: Arc<Box<dyn MCPServerAdapter>>,
+    server_adapter: Arc<dyn MCPServerAdapter>,
     /// Session token for stateful MCP transports; `None` for stateless servers.
     session_id: Arc<RwLock<Option<String>>>,
 }
 
 impl MCPClient {
     /// Construct a new client from a [`MCPServersetting`] and a protocol adapter.
-    pub fn new(setting: MCPServerSetting, adapter: Box<dyn MCPServerAdapter>) -> Result<Self> {
+    pub fn new(setting: MCPServerSetting, adapter: Arc<dyn MCPServerAdapter>) -> Result<Self> {
         Ok(Self {
             name: setting.name,
             url: setting.url,
             api_key: setting.api_key,
             http_client: HttpClient::new()?,
-            server_adapter: Arc::new(adapter),
+            server_adapter: adapter,
             session_id: Arc::new(None.into()),
         })
     }
@@ -234,7 +234,7 @@ impl MCPClient {
             "Accept",
             HeaderValue::from_static("application/json, text/event-stream"),
         );
-
+        info!("servername: {} apikey: {}", self.name, self.api_key );
         if !self.api_key.is_empty() {
             headers.insert(
                 "Authorization",
@@ -313,7 +313,7 @@ impl MCPClient {
 /// Constructs requests using `tools/list`, `tools/get`, and `tools/call` methods,
 /// and extracts the session ID from the `Mcp-Session-Id` response header.
 #[derive(Debug)]
-struct StandardAdapter {}
+pub struct StandardAdapter {}
 
 impl MCPServerAdapter for StandardAdapter {
     fn build_tool_list_request(&self) -> JsonRpcRequest {
@@ -357,7 +357,7 @@ impl MCPServerAdapter for StandardAdapter {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {
-                "name": "agentic-core",
+                "name": "rustic-agent",
                 "version": "1.0.0"
             }
         });

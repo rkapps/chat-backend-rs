@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -8,8 +8,7 @@ use axum::{
 };
 use reqwest::{Method, StatusCode, header};
 use rustic_agent::{
-    client::mcp::MCPServerAdapter,
-    services::{
+    client::mcp::MCPServerAdapter, services::{
         agent::AgentService,
         config::{
             agent::{AgentConfig, ExecutionType},
@@ -17,8 +16,7 @@ use rustic_agent::{
             provider::{ModelConfig, ProviderConfig, ResolvedProvider},
         },
         registry::{agent::AgentRegistry, provider::ProviderRegistry},
-    },
-    tools::{mcp::MCPRegistry, tool::ToolRegistry},
+    }, tools::{mcp::MCPRegistry, tool::ToolRegistry},
 };
 use rustic_core::Tool;
 use tokio::{net::TcpListener, sync::RwLock};
@@ -68,6 +66,7 @@ pub struct AgenticBootBuilder {
     providers_path: Option<String>,
     chat_templates_path: Option<String>,
     mcp_servers_config_path: Option<String>,
+    mcp_server_adapters: HashMap<String, Arc<dyn MCPServerAdapter>>,
     mongo_uri: Option<String>,
     mongo_db: Option<String>,
     cors_origins: Vec<String>,
@@ -89,6 +88,7 @@ impl AgenticBootBuilder {
             providers_path: None,
             chat_templates_path: None,
             mcp_servers_config_path: None,
+            mcp_server_adapters: HashMap::new(),
             mongo_uri: None,
             mongo_db: None,
             cors_origins: Vec::new(),
@@ -120,6 +120,11 @@ impl AgenticBootBuilder {
 
     pub fn mcp_config(mut self, mcp_servers_config_path: String) -> Self {
         self.mcp_servers_config_path = Some(mcp_servers_config_path);
+        self
+    }
+
+    pub fn mcp_server_adapter(mut self, server_name: String, adapter: Arc<dyn MCPServerAdapter>) -> Self {
+        self.mcp_server_adapters.insert(server_name, adapter);
         self
     }
 
@@ -198,7 +203,7 @@ impl AgenticBootBuilder {
             info!("MCPServer config path: {}", full_path);
 
             for server in load_mcp_config(full_path).await? {
-                info!("McpServerConfig: {}", server.name);
+                info!("McpServerConfig: {:?}", server);
 
                 let mcp_server_config = match server.to_core_config() {
                     Ok(c) => c,
@@ -207,8 +212,12 @@ impl AgenticBootBuilder {
                         continue;
                     }
                 };
-
-                let definitions = mcp_registry.register_server(mcp_server_config).await?;
+                let adapter = self.mcp_server_adapters.get(&server.name);
+                let definitions = if let Some(adapter) = adapter {
+                    mcp_registry.register_server_with_adapter(mcp_server_config, adapter.clone()).await?
+                } else {
+                    mcp_registry.register_server(mcp_server_config).await?
+                };
 
                 let to_register = if server.enabled_tools.is_empty() {
                     // expose all

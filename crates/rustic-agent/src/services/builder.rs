@@ -245,7 +245,7 @@ impl<'a> AgentBuilder<'a> {
     ) -> Result<Self> {
         let mut registry = self.service.mcp_registry.write().await;
         let _ = registry
-            .register_server_with_adapter(setting, Box::new(adapter))
+            .register_server_with_adapter(setting, Arc::new(adapter))
             .await?;
         Ok(self)
     }

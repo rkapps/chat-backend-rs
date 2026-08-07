@@ -160,12 +160,12 @@ impl HttpClient {
     ) -> HttpResult<HttpResponse<T>> {
         debug!("Url: {}", url);
         let mut request = self.client.post(&url);
-
+        trace!("headers: {:#?}", headers);
         if let Some(h) = headers {
             request = request.headers(h);
         }
+        
         trace!("Body: {:#?}", body);
-
         let response = request.json(&body).send().await.map_err(|e| {
             error!("Error {:?}", e);
             if e.is_timeout() {
@@ -176,6 +176,7 @@ impl HttpClient {
                 HttpError::Other(e.to_string())
             }
         })?;
+        trace!("resonse: {:#?}", response);
 
         let status = response.status();
         let response_headers = response.headers().clone();
