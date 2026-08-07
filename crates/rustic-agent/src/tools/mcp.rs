@@ -238,7 +238,7 @@ impl MCPClient {
             "Accept",
             HeaderValue::from_static("application/json, text/event-stream"),
         );
-        info!("servername: {} apikey: {}", self.name, self.api_key );
+        // info!("servername: {} apikey: {}", self.name, self.api_key );
         if !self.api_key.is_empty() {
             let header_name = self.auth_header_name.as_deref().unwrap_or("Authorization");
 
