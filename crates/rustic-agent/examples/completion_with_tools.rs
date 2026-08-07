@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
         temperature: 0.7,
         tool_registry: Arc::new(tool_registry),
         response_format_schema: None,
-        relay_tool_output: false
+        relay_tool_output: false,
     };
 
     let content = "what is the weather in paris and San Fransicso".to_string();

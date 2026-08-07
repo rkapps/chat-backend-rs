@@ -137,7 +137,7 @@ impl AgentService {
         llm_config: &LlmConfig,
         system_prompt: Option<String>,
         response_format_schema: &Option<Value>,
-        relay_tool_output: &bool
+        relay_tool_output: &bool,
     ) -> Result<Agent> {
         let agent_config = self.find_agent_config(agent_id).await?;
 
@@ -201,7 +201,7 @@ impl AgentService {
         let agent = self
             .builder(&agent_config.id)
             .with_system_prompt(system_prompt.unwrap_or_default())
-            .with_relay_tool_output(relay_tool_output.clone())
+            .with_relay_tool_output(*relay_tool_output)
             .with_response_format_schema(response_format_schema.clone())
             .with_tools(tool_registry.get_tools())
             .with_filtered_mcp(mcp_registry)
@@ -275,7 +275,7 @@ impl AgentService {
                 &input_llm_config,
                 input.system_prompt.clone(),
                 &config.response_format_schema,
-                &input.relay_tool_output
+                &input.relay_tool_output,
             )
             .await?;
 

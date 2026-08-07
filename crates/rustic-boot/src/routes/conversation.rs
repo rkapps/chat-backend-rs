@@ -9,7 +9,7 @@ use axum::{
 };
 use futures::StreamExt;
 use reqwest::StatusCode;
-use tokio::sync::Mutex;
+use rustic_agent::agents::domain::TurnChunkResponse;
 use tracing::{debug, error, info};
 
 use crate::{
@@ -19,6 +19,7 @@ use crate::{
         domain::{Conversation, ConversationRequest, ConversationUpdateRequest, Turn},
         dto::{ConversationsQuery, TurnRequest, TurnResponse},
     },
+    routes::domain::UiChunk,
 };
 
 pub fn conversation_routes<S>(state: S) -> Router<S>
@@ -201,46 +202,31 @@ pub async fn send_turn_streaming_handler(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let cservice = service.clone(); // ← clone Arc
-    let final_content = Arc::new(Mutex::new(String::new()));
     let request = request.clone();
 
     let event_stream = stream.then(move |chunk_result| {
         // ✅ Clone handles into the async block
         let conversation_service = cservice.clone();
         let request = request.clone();
-        let final_content = final_content.clone();
         let uid = user.sub.clone();
         let id = id.clone();
 
         async move {
             match chunk_result {
                 Ok(chunk) => {
-                    // ✅ Always accumulate content once (was being doubled before)
-                    {
-                        let mut fc = final_content.lock().await;
-                        fc.push_str(&chunk.content);
-                    }
-
-                    // ✅ Save only on the final chunk
-                    if chunk.is_final {
-                        let fc = final_content.lock().await;
-                        info!("final_content: {:?}", *fc);
-                        // let unescaped: serde_json::Value = serde_json::from_str(&fc);
-                        if let Ok(c) = serde_json::from_str(&fc) {
-                            let unescaped: serde_json::Value = serde_json::from_str(c).unwrap();
-                            info!("Final Content {}", unescaped);
-                        };
-                        // info!("Final Content {}", serde_json::to_string_pretty(&unescaped).unwrap());
-                        // elapsed time
+                    if let TurnChunkResponse::Final { response } = &chunk {
+                        // already handled above — send done event
+                        let turn_response = response.clone();
+                        info!("Turn Response: {}", turn_response);
                         let elapsed = start.elapsed();
                         match conversation_service
                             .save_turn(
                                 &uid,
                                 &id,
                                 request.prompt,
-                                fc.clone(),
-                                Some(chunk.response_id.clone()),
-                                chunk.usage.clone(),
+                                turn_response.content.clone(),
+                                turn_response.response_id.clone(),
+                                Some(turn_response.usage.clone()),
                                 Some(elapsed.as_millis() as u64),
                             )
                             .await
@@ -257,8 +243,11 @@ pub async fn send_turn_streaming_handler(
                         };
                     }
 
-                    match serde_json::to_string(&chunk) {
-                        Ok(c) => Ok::<Event, Infallible>(Event::default().data(c).event("message")),
+                    let ui_chunk = UiChunk::from(&chunk);
+                    match serde_json::to_string(&ui_chunk) {
+                        Ok(data) => {
+                            Ok::<Event, Infallible>(Event::default().data(data).event("message"))
+                        }
                         Err(e) => Ok::<Event, Infallible>(
                             Event::default().data(format!("{}", e)).event("error"),
                         ),

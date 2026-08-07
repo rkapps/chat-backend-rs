@@ -13,19 +13,13 @@ use crate::{
     client::{
         llm::{CompletionStreamResponse, LlmClient},
         request::CompletionRequest,
-        response::{
-            CompletionChunkResponse, CompletionResponse, CompletionResponseContent,
-            CompletionResponseTokenUsage,
-        },
+        response::CompletionChunkResponse,
         tools::ToolCallRequest,
+        usage::TokenUsage,
     },
     providers::anthropic::{
-        ANTHROPIC_BASE_URL, ANTHROPIC_VERSION,
-        request::AnthropicCompletionRequest,
-        response::{
-            AnthropicChunkResponse, AnthropicCompletionResponse,
-            AnthropicCompletionResponseContent::{Text, Thought, ToolUse},
-        },
+        ANTHROPIC_BASE_URL, ANTHROPIC_VERSION, request::AnthropicCompletionRequest,
+        response::AnthropicChunkResponse,
     },
 };
 
@@ -73,90 +67,6 @@ impl AnthropicClient {
 
 #[async_trait]
 impl LlmClient for AnthropicClient {
-    async fn complete(&self, request: CompletionRequest) -> HttpResult<CompletionResponse> {
-        let url = format!("{}/v1/messages", self.base_url);
-
-        let agent_id = request.id.clone();
-        let mut headers = reqwest::header::HeaderMap::new();
-        let api_key: HeaderValue = self
-            .api_key
-            .parse()
-            .map_err(|_| HttpError::ApiKeyParsingFailed)?;
-        let anthropic_version = self
-            .anthropic_version
-            .parse()
-            .map_err(|_| HttpError::ApiVersionParsingFailed)?;
-
-        headers.insert("x-api-key", api_key);
-        headers.insert("anthropic-version", anthropic_version);
-
-        let arequest = AnthropicCompletionRequest::new(request)
-            .map_err(|e| HttpError::CompletionRequestError(e.to_string()))?;
-
-        arequest.log_info();
-        arequest.log_debug();
-        arequest.log_trace();
-
-        let body = serde_json::json!(arequest);
-        let aresponse = self
-            .http_client
-            .post_request::<AnthropicCompletionResponse>(url, Some(headers), body)
-            .await?;
-
-        debug!("Response: {:#?}", aresponse);
-
-        let mut rcontents: Vec<CompletionResponseContent> = Vec::new();
-        for content in aresponse.content {
-            match content {
-                Text { text } => {
-                    let rcontent = CompletionResponseContent::Text(text);
-                    rcontents.push(rcontent);
-                }
-                Thought { thinking } => {
-                    let rcontent = CompletionResponseContent::Thought(thinking);
-                    rcontents.push(rcontent);
-                }
-                ToolUse { id, name, input } => {
-                    let rcontent = CompletionResponseContent::ToolCall(ToolCallRequest {
-                        id,
-                        name,
-                        arguments: input,
-                    });
-                    rcontents.push(rcontent);
-                }
-            }
-        }
-
-        let cusage = aresponse.usage;
-        let read_input_tokens = cusage.cache_read_input_tokens.unwrap_or_default();
-        let creation_input_tokens = cusage.cache_creation_input_tokens.unwrap_or_default();
-
-        let total =
-            cusage.input_tokens + read_input_tokens + creation_input_tokens + cusage.output_tokens;
-
-        let usage = CompletionResponseTokenUsage {
-            // Fresh tokens + the tokens used to build the cache
-            input_tokens: cusage.input_tokens,
-            // Tokens saved (Read) or specifically marked as "Written" (Creation)
-            cached_read_tokens: read_input_tokens,
-            cached_write_tokens: creation_input_tokens,
-            tool_use_tokens: 0,
-            reasoning_tokens: 0,
-            output_tokens: cusage.output_tokens,
-            total_tokens: total,
-        };
-
-        let cresponse = CompletionResponse {
-            id: agent_id,
-            model: aresponse.model,
-            response_id: String::new(),
-            contents: rcontents,
-            usage,
-        };
-
-        Ok(cresponse)
-    }
-
     async fn complete_with_stream(
         &self,
         request: CompletionRequest,
@@ -313,7 +223,7 @@ impl LlmClient for AnthropicClient {
                         let creation_input_tokens = cusage.cache_creation_input_tokens.unwrap_or_default();
                         let total = cusage.input_tokens + read_input_tokens + creation_input_tokens + cusage.output_tokens;
 
-                        let usage = CompletionResponseTokenUsage {
+                        let usage = TokenUsage {
                             // Fresh tokens + the tokens used to build the cache
                             input_tokens: cusage.input_tokens,
                             // Tokens saved (Read) or specifically marked as "Written" (Creation)
@@ -332,6 +242,7 @@ impl LlmClient for AnthropicClient {
                         yield Ok(CompletionChunkResponse::stop(
                             agent_id.clone(),
                             arequest.model.clone(),
+                            String::new(),
                             String::new(),
                             Some(usage),
                         ))

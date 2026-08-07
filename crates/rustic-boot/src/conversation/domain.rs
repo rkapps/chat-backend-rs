@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rustic_agent::{
-    client::response::CompletionResponseTokenUsage,
+    TokenUsage,
     services::config::agent::{CompletionStrategy, HistoryMode},
 };
 use rustic_storage::core::repository::RepoModel;
@@ -61,7 +61,7 @@ pub struct Conversation {
     pub max_turns: Option<u32>,
     pub created_at: DateTime<Utc>,
     pub last_updated_at: DateTime<Utc>,
-    pub usage: Option<CompletionResponseTokenUsage>,
+    pub usage: Option<TokenUsage>,
     pub input_tokens_cost: f64,
     pub cached_read_tokens_cost: f64,
     pub cached_write_tokens_cost: f64,
@@ -170,7 +170,7 @@ pub struct Turn {
     pub user_prompt: String,
     pub response_content: String,
     pub response_id: Option<String>,
-    pub usage: Option<CompletionResponseTokenUsage>,
+    pub usage: Option<TokenUsage>,
     pub created_at: DateTime<Utc>,
     pub input_tokens_cost: f64,
     pub cached_read_tokens_cost: f64,

@@ -199,7 +199,11 @@ impl HttpClient {
                 // strip SSE wrapper if needed
                 let json_text = if content_type.contains("text/event-stream") {
                     text.lines()
-                        .find_map(|line| line.strip_prefix("data: "))
+                        // .find_map(|line| line.strip_prefix("data: "))
+                        .find_map(|line| {
+                            line.strip_prefix("data: ")
+                                .or_else(|| line.strip_prefix("data:"))
+                        })
                         .ok_or_else(|| {
                             HttpError::Other("No data field in SSE response".to_string())
                         })?

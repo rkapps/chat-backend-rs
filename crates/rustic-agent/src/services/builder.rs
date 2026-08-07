@@ -58,7 +58,7 @@ pub struct AgentBuilder<'a> {
     filtered_mcp: Option<MCPRegistry>,
     strategy: Option<CompletionStrategy>,
     response_format_schema: Option<Value>,
-    relay_tool_output: bool
+    relay_tool_output: bool,
 }
 
 impl<'a> AgentBuilder<'a> {
@@ -79,7 +79,7 @@ impl<'a> AgentBuilder<'a> {
             filtered_mcp: None,
             strategy: None,
             response_format_schema: None,
-            relay_tool_output: false
+            relay_tool_output: false,
         }
     }
 
@@ -88,7 +88,7 @@ impl<'a> AgentBuilder<'a> {
         self.relay_tool_output = relay_tool_output;
         self
     }
-    
+
     /// Set the system prompt prepended before every conversation.
     pub fn with_system_prompt(mut self, system_prompt: String) -> Self {
         self.system_prompt = Some(system_prompt);
@@ -357,24 +357,18 @@ impl<'a> AgentBuilder<'a> {
     }
 
     fn together_client(&self, api_key: &str) -> Result<Arc<dyn LlmClient>> {
-        debug!("together client: {}", api_key);
-
         let client = TogetherClient::new(api_key.to_string())
             .with_context(|| anyhow::anyhow!("Error creating Together client"))?;
         Ok(Arc::new(client))
     }
 
     fn fireworks_client(&self, api_key: &str) -> Result<Arc<dyn LlmClient>> {
-        debug!("fireworks client: {}", api_key);
-
         let client = FireworksClient::new(api_key.to_string())
             .with_context(|| anyhow::anyhow!("Error creating Fireworks client"))?;
         Ok(Arc::new(client))
     }
 
     fn mistral_client(&self, api_key: &str) -> Result<Arc<dyn LlmClient>> {
-        debug!("mistral client: {}", api_key);
-
         let client = MistralClient::new(api_key.to_string())
             .with_context(|| anyhow::anyhow!("Error creating Mistral client"))?;
         Ok(Arc::new(client))
@@ -442,7 +436,7 @@ impl<'a> AgentBuilder<'a> {
             tool_registry,
             mcp_registry,
             response_format_schema,
-            relay_tool_output
+            relay_tool_output,
         })
     }
 }

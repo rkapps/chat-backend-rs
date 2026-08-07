@@ -1,9 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use rustic_agent::{
-    client::{llm::CompletionStreamResponse, response::CompletionResponseTokenUsage},
-    services::agent::AgentService,
-};
+use rustic_agent::{TokenUsage, agents::domain::TurnStreamResponse, services::agent::AgentService};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -129,7 +126,7 @@ impl ConversationService {
         user_prompt: String,
         response_content: String,
         response_id: Option<String>,
-        usage: Option<CompletionResponseTokenUsage>,
+        usage: Option<TokenUsage>,
         execution_time_ms: Option<u64>,
     ) -> Result<Turn> {
         let conversation = self
@@ -219,8 +216,7 @@ impl ConversationService {
         let response = cresponse.clone();
         let usage = cresponse.usage;
         let response_id = response.response_id.clone();
-
-        let rcontent = response.text_or_default();
+        let rcontent = response.content;
 
         // save turn
         self.save_turn(
@@ -228,7 +224,7 @@ impl ConversationService {
             conversation_id,
             request.prompt,
             rcontent.clone(),
-            Some(response_id.clone()),
+            response_id.clone(),
             Some(usage.clone()),
             Some(elapsed.as_millis() as u64), // ← add to save_turn
         )
@@ -237,7 +233,7 @@ impl ConversationService {
         let tresponse = TurnResponse {
             role: "assistant".to_string(),
             content: Some(rcontent),
-            response_id: Some(response.response_id),
+            response_id: response.response_id,
         };
 
         Ok(tresponse)
@@ -255,7 +251,7 @@ impl ConversationService {
         uid: &str,
         conversation_id: &str,
         request: TurnRequest,
-    ) -> Result<CompletionStreamResponse> {
+    ) -> Result<TurnStreamResponse> {
         debug!("Conversation: {}", conversation_id);
         let conversation = self
             .get_conversation(uid, conversation_id)
@@ -271,7 +267,9 @@ impl ConversationService {
         let cturns = build_completion_turns(&conversation, turns);
 
         let runner = build_agent_runner(self.agent_service.clone(), &conversation).await?;
-        let stream = runner.execute_streaming(cturns, &request.prompt, true).await?;
+        let stream = runner
+            .execute_streaming(cturns, &request.prompt, true)
+            .await?;
         Ok(Box::pin(stream))
     }
 
@@ -304,7 +302,7 @@ impl ConversationService {
         uid: &str,
         conversation_id: &str,
         response_id: Option<String>,
-        usage: CompletionResponseTokenUsage, // conversation: Conversation
+        usage: TokenUsage, // conversation: Conversation
         turn: &Turn,
     ) -> Result<()> {
         let mut conversation = self

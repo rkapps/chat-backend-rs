@@ -9,8 +9,8 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::{
-    CompletionResponse, CompletionResponseTokenUsage, Message,
-    agents::domain::{CompletionTurn, ExecutionMode, StageDecision},
+    Message, TokenUsage,
+    agents::domain::{CompletionTurn, ExecutionMode, StageDecision, TurnResponse},
 };
 
 /// Build a human-readable status string from an orchestrator decision for display in the stream.
@@ -61,15 +61,14 @@ pub fn build_pipeline_input(original_messages: &[Message]) -> Vec<Message> {
 /// Each entry is keyed by `agent_id`. The response text is parsed as JSON if possible;
 /// otherwise it is stored as a JSON string. The merged object is serialised back to a string
 /// for inclusion in the next orchestrator turn.
-pub fn merge_responses(
-    responses: &[(String, CompletionResponse)],
-) -> (String, CompletionResponseTokenUsage) {
+pub fn merge_responses(responses: &[TurnResponse]) -> (String, TokenUsage) {
     let mut merged = serde_json::Map::new();
-    let mut total_usage = CompletionResponseTokenUsage::default();
+    let mut total_usage = TokenUsage::default();
 
-    for (agent_id, response) in responses {
-        let content = response.text().unwrap_or_default();
-        let content = build_clean_json(content);
+    for response in responses {
+        let agent_id = response.agent_id.clone();
+        let content = response.content.clone();
+        let content = build_clean_json(&content);
         let value: Value =
             serde_json::from_str(&content).unwrap_or(Value::String(content.to_string()));
         merged.insert(agent_id.clone(), value);
@@ -128,6 +127,16 @@ pub fn unwrap_typed_value(v: Value) -> Value {
 
 pub fn merge_tool_output(merged: &mut serde_json::Map<String, Value>, tool_output: &Message) {
     if let Message::ToolOutput { output, .. } = tool_output {
+        // parse string output to Value if needed
+        let parsed;
+        let output = match output {
+            Value::String(s) => {
+                parsed = serde_json::from_str(s).unwrap_or(output.clone());
+                &parsed
+            }
+            other => other,
+        };
+
         if let Value::Object(map) = output {
             for (key, value) in map {
                 match merged.get_mut(key) {
@@ -155,6 +164,26 @@ pub fn merge_tool_output(merged: &mut serde_json::Map<String, Value>, tool_outpu
                     }
                     None => {
                         merged.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        } else if let Value::Array(arr) = output {
+            // tool returned a top-level array — merge each object's fields
+            for item in arr {
+                if let Value::Object(map) = item {
+                    for (key, value) in map {
+                        match merged.get_mut(key) {
+                            Some(existing) => {
+                                if let Value::Array(e) = existing {
+                                    e.push(value.clone());
+                                } else {
+                                    *existing = json!([existing.clone(), value.clone()]);
+                                }
+                            }
+                            None => {
+                                merged.insert(key.clone(), json!([value.clone()]));
+                            }
+                        }
                     }
                 }
             }

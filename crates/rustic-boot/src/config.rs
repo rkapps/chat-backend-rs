@@ -93,7 +93,7 @@ pub async fn load_agents_config(
                 agent.response_format_schema = Some(serde_json::Value::from_str(&schema)?);
                 trace!("response schema: {:?}", agent.response_format_schema);
             }
-            info!("Response format schema: {:?}", agent.response_format_schema);
+            debug!("Response format schema: {:?}", agent.response_format_schema);
         }
     }
     Ok(agents)

@@ -203,7 +203,7 @@ impl AgenticBootBuilder {
             info!("MCPServer config path: {}", full_path);
 
             for server in load_mcp_config(full_path).await? {
-                info!("McpServerConfig: {:?}", server);
+                info!("McpServerConfig: {}:{}", server.name, server.url);
 
                 let mcp_server_config = match server.to_core_config() {
                     Ok(c) => c,
@@ -429,7 +429,6 @@ pub fn build_resolved_providers(
             }
             None => None,
         };
-
         let base_url = match &config.base_url_env {
             Some(env_var) => {
                 let url = std::env::var(env_var).with_context(|| {

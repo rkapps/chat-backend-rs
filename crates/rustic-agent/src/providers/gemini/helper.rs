@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::{
-    CompletionResponseTokenUsage, providers::gemini::response::GeminiInteractionsResponseTokenUsage,
+    client::usage::TokenUsage, providers::gemini::response::GeminiInteractionsResponseTokenUsage,
 };
 
 pub fn clean_for_gemini(params: &serde_json::Value) -> serde_json::Value {
@@ -58,8 +58,8 @@ pub fn clean_for_gemini(params: &serde_json::Value) -> serde_json::Value {
 
 pub fn to_completion_reponse_token_usage(
     cusage: GeminiInteractionsResponseTokenUsage,
-) -> CompletionResponseTokenUsage {
-    CompletionResponseTokenUsage {
+) -> TokenUsage {
+    TokenUsage {
         input_tokens: cusage.total_input_tokens - cusage.total_cached_tokens,
         cached_read_tokens: cusage.total_cached_tokens,
         cached_write_tokens: 0,

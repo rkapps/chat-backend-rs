@@ -12,19 +12,15 @@ use crate::{
     client::{
         llm::{CompletionStreamResponse, LlmClient},
         request::CompletionRequest,
-        response::{
-            CompletionChunkResponse, CompletionResponse, CompletionResponseContent,
-            CompletionResponseTokenUsage,
-        },
+        response::CompletionChunkResponse,
         tools::ToolCallRequest,
+        usage::TokenUsage,
     },
     providers::openai::{
         OPENAI_BASE_URL,
         request::{OpenAICompletionsRequest, OpenAIRequest},
         response::{
-            OpenAIChunkResponseData, OpenAICompletionsChunkResponse, OpenAICompletionsResponse,
-            OpenAICompletionsUsage, OpenAIResponse,
-            OpenAIResponseOutput::{FunctionCall, Message, Reasoning},
+            OpenAIChunkResponseData, OpenAICompletionsChunkResponse, OpenAICompletionsUsage,
         },
     },
 };
@@ -43,19 +39,6 @@ pub struct OpenAIClient {
 
 #[async_trait]
 impl LlmClient for OpenAIClient {
-    async fn complete(&self, request: CompletionRequest) -> HttpResult<CompletionResponse> {
-        info!(
-            target: "agent-openai",
-            "Openai request - Use Responses APi: {:?}", self.use_responses_api
-        );
-
-        if self.use_responses_api {
-            self.complete_with_responses_api(request).await
-        } else {
-            self.complete_with_chat_completions(request).await
-        }
-    }
-
     async fn complete_with_stream(
         &self,
         request: CompletionRequest,
@@ -100,7 +83,7 @@ impl OpenAIClient {
     }
 
     // get completion usage from openai usage
-    fn get_usage(cusage: &OpenAICompletionsUsage) -> CompletionResponseTokenUsage {
+    fn get_usage(cusage: &OpenAICompletionsUsage) -> TokenUsage {
         // let cusage = oresponse.usage;
         let cached = cusage
             .prompt_tokens_details
@@ -114,7 +97,7 @@ impl OpenAIClient {
             .map(|d| d.reasoning_tokens)
             .unwrap_or(0);
 
-        CompletionResponseTokenUsage {
+        TokenUsage {
             input_tokens: cusage.prompt_tokens - cached,
             cached_read_tokens: cached,
             cached_write_tokens: 0, // not in OpenAI chat completions format
@@ -123,209 +106,6 @@ impl OpenAIClient {
             output_tokens: cusage.completion_tokens - reasoning,
             total_tokens: cusage.total_tokens,
         }
-    }
-
-    async fn complete_with_chat_completions(
-        &self,
-        request: CompletionRequest,
-    ) -> HttpResult<CompletionResponse> {
-        let agent_id = request.id.clone();
-        let url = format!("{}/chat/completions", self.base_url,);
-        let mut headers = reqwest::header::HeaderMap::new();
-        let bearer = format!("Bearer {}", self.api_key)
-            .parse()
-            .map_err(|_| HttpError::ApiKeyParsingFailed)?;
-
-        headers.insert("Authorization", bearer);
-        let orequest = OpenAICompletionsRequest::new(request.clone())
-            .map_err(|e| HttpError::CompletionRequestError(e.to_string()))?;
-
-        orequest.log_info();
-        orequest.log_debug();
-        orequest.log_trace();
-
-        let body = serde_json::json!(orequest);
-        trace!(
-            target: "agent-openai",
-            "Body: {:#?}", body
-        );
-        let oresponse = self
-            .http_client
-            .post_request::<OpenAICompletionsResponse>(url, Some(headers), body)
-            .await?;
-
-        debug!(
-            target: "agent-openai",
-            "OpenAICompletionResponse: {:#?}", oresponse
-        );
-
-        if oresponse.choices.is_empty() {
-            return Err(HttpError::Other(format!("Response error",)));
-        }
-
-        // set the completionresponse
-        let mut rcontents: Vec<CompletionResponseContent> = Vec::new();
-
-        for choice in oresponse.choices {
-            debug!(
-                target: "agent-openai",
-                "Choice: {:#?}", choice
-            );
-
-            if choice.finish_reason == "stop" {
-                let rcontent =
-                    CompletionResponseContent::Text(choice.message.content.unwrap_or_default());
-                rcontents.push(rcontent);
-                break;
-            } else if choice.finish_reason == "length" {
-                return Err(HttpError::Other(
-                    "Response truncated — model hit max_tokens limit. Consider using a model with higher output token limit or reducing data volume.".to_string()
-                ));
-            } else if choice.finish_reason == "tool_calls" {
-                for tool_call in choice.message.tool_calls.unwrap() {
-                    let arguments: Value = match serde_json::from_str(&tool_call.function.arguments)
-                    {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return Err(HttpError::Other(format!(
-                                "Error parsing function arguments: {:#?}",
-                                e
-                            )));
-                        }
-                    };
-                    let rcontent = CompletionResponseContent::ToolCall(ToolCallRequest {
-                        id: tool_call.id.unwrap(),
-                        name: tool_call.function.name.unwrap(),
-                        arguments,
-                    });
-                    rcontents.push(rcontent);
-                }
-            }
-        }
-
-        let usage = OpenAIClient::get_usage(&oresponse.usage);
-        let cresponse = CompletionResponse {
-            id: agent_id,
-            model: oresponse.model,
-            response_id: String::default(),
-            contents: rcontents,
-            usage,
-        };
-
-        Ok(cresponse)
-    }
-
-    async fn complete_with_responses_api(
-        &self,
-        request: CompletionRequest,
-    ) -> HttpResult<CompletionResponse> {
-        let url = format!("{}/v1/responses", self.base_url,);
-
-        let agent_id = request.id.clone();
-        let mut headers = reqwest::header::HeaderMap::new();
-        let bearer = format!("Bearer {}", self.api_key)
-            .parse()
-            .map_err(|_| HttpError::ApiKeyParsingFailed)?;
-
-        headers.insert("Authorization", bearer);
-        let orequest = OpenAIRequest::new(request.clone())
-            .map_err(|e| HttpError::CompletionRequestError(e.to_string()))?;
-
-        orequest.log_info();
-        orequest.log_debug();
-        orequest.log_trace();
-
-        let body = serde_json::json!(orequest);
-        trace!(
-            target: "agent-openai",
-            "Body: {:#?}", body
-        );
-        let oresponse = self
-            .http_client
-            .post_request::<OpenAIResponse>(url, Some(headers), body)
-            .await?;
-        let id = if request.store {
-            oresponse.id.clone()
-        } else {
-            String::new()
-        };
-
-        debug!(
-            target: "agent-openai",
-            "OpenAICompletionResponse: {:#?}", oresponse
-        );
-
-        let mut rcontents: Vec<CompletionResponseContent> = Vec::new();
-
-        for output in oresponse.output {
-            match output {
-                Message {
-                    id: _,
-                    status,
-                    content,
-                } => {
-                    if status == "completed" {
-                        for content in content {
-                            if content.r#type == "output_text" {
-                                let rcontent = CompletionResponseContent::Text(content.text);
-                                rcontents.push(rcontent);
-                                break;
-                            }
-                        }
-                    }
-                }
-                FunctionCall {
-                    status,
-                    arguments,
-                    call_id,
-                    name,
-                } => {
-                    if status == "completed" {
-                        let arguments: Value = match serde_json::from_str(arguments.as_str()) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                return Err(HttpError::Other(format!(
-                                    "Error parsing function arguments: {:#?}",
-                                    e
-                                )));
-                            }
-                        };
-
-                        let rcontent = CompletionResponseContent::ToolCall(ToolCallRequest {
-                            id: call_id,
-                            name,
-                            arguments,
-                        });
-                        rcontents.push(rcontent);
-                    }
-                }
-                Reasoning { id: _, summary: _ } => {}
-            }
-        }
-
-        let cusage = oresponse.usage;
-        let usage = CompletionResponseTokenUsage {
-            input_tokens: cusage.input_tokens - cusage.input_tokens_details.cached_tokens, // fresh only
-            cached_read_tokens: cusage.input_tokens_details.cached_tokens,
-            cached_write_tokens: 0,
-            tool_use_tokens: 0,
-            output_tokens: cusage.output_tokens - cusage.output_tokens_details.reasoning_tokens, // visible only
-            reasoning_tokens: cusage.output_tokens_details.reasoning_tokens,
-            total_tokens: (cusage.input_tokens - cusage.input_tokens_details.cached_tokens)
-                + cusage.input_tokens_details.cached_tokens
-                + cusage.output_tokens_details.reasoning_tokens
-                + (cusage.output_tokens - cusage.output_tokens_details.reasoning_tokens),
-        };
-
-        let cresponse = CompletionResponse {
-            id: agent_id,
-            model: oresponse.model,
-            response_id: id,
-            contents: rcontents,
-            usage,
-        };
-
-        Ok(cresponse)
     }
 
     async fn complete_with_stream_chat_completions(
@@ -465,6 +245,7 @@ impl OpenAIClient {
                             agent_id.clone(),
                             String::new(),
                             String::new(),
+                            String::new(),
                             usage.clone(),
                         ))
                     }
@@ -506,6 +287,7 @@ impl OpenAIClient {
                             // Qwen stop — yield stop immediately with captured usage
                             yield Ok(CompletionChunkResponse::stop(
                                 agent_id.clone(),
+                                String::new(),
                                 String::new(),
                                 String::new(),
                                 usage.clone(),
@@ -699,7 +481,7 @@ impl OpenAIClient {
                              let cusage = response.usage.unwrap();
                             debug!(target: "agent-openai", "chunk token: {:#?}", cusage);
 
-                             let usage = CompletionResponseTokenUsage {
+                             let usage = TokenUsage {
                                 input_tokens: cusage.input_tokens,
                                  cached_read_tokens: cusage.input_tokens_details.cached_tokens,
                                  cached_write_tokens: 0,
@@ -722,6 +504,7 @@ impl OpenAIClient {
                                  agent_id.clone(),
                                  response.model,
                                  id,
+                                 String::new(),
                                  Some(usage),
                              ))
                          }

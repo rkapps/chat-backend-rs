@@ -10,24 +10,14 @@ use serde_json::Value;
 use tracing::{debug, error, trace};
 
 use crate::{
-    ToolCallRequest,
     client::{
         llm::{CompletionStreamResponse, LlmClient},
         request::CompletionRequest,
-        response::{
-            CompletionChunkResponse, CompletionResponse, CompletionResponseContent,
-            CompletionResponseTokenUsage,
-        },
+        response::CompletionChunkResponse,
     },
     providers::gemini::{
-        GEMINI_BASE_URL,
-        chunk::GeminiChunkEvent,
-        helper::to_completion_reponse_token_usage,
+        GEMINI_BASE_URL, chunk::GeminiChunkEvent, helper::to_completion_reponse_token_usage,
         request::GeminiInteractionsRequest,
-        response::{
-            GeminiInteractionsResponse,
-            GeminiStepsResponseOutput::{FunctionCall, ModelOutput, Thought, UserInput},
-        },
     },
 };
 
@@ -51,117 +41,10 @@ impl GeminiClient {
             http_client: HttpClient::new()?,
         })
     }
-
-    /// Send a blocking completion request to `POST /v1beta/interactions` and normalise
-    /// the response, mapping Gemini's token-usage fields to the canonical
-    /// [`CompletionResponseTokenUsage`] shape.
-    async fn complete_interactions(
-        &self,
-        request: CompletionRequest,
-    ) -> HttpResult<CompletionResponse> {
-        let url = format!("{}/v1beta/interactions", self.base_url,);
-
-        let mut headers = reqwest::header::HeaderMap::new();
-        let agent_id = request.id.clone();
-        let api_key: HeaderValue = self
-            .api_key
-            .parse()
-            .map_err(|_| HttpError::ApiKeyParsingFailed)?;
-
-        headers.insert("x-goog-api-key", api_key);
-
-        let grequest = GeminiInteractionsRequest::new(request)
-            .map_err(|e| HttpError::CompletionRequestError(e.to_string()))?;
-
-        grequest.log_info();
-        grequest.log_debug();
-        grequest.log_trace();
-
-        let body = serde_json::json!(grequest);
-        let gresponse = self
-            .http_client
-            .post_request::<GeminiInteractionsResponse>(url, Some(headers), body)
-            .await?;
-
-        debug!(target: "agent-gemini", "GeminiCompletionResponse: {:#?}", gresponse);
-
-        let id = gresponse.id;
-        let mut rcontents: Vec<CompletionResponseContent> = Vec::new();
-        for step in gresponse.steps {
-            match step {
-                UserInput { content } => {
-                    let rcontent = &content[0];
-                    let rtext = CompletionResponseContent::Text(rcontent.text.clone());
-                    rcontents.push(rtext);
-                }
-                ModelOutput { content } => {
-                    let rcontent = &content[0];
-                    let rtext = CompletionResponseContent::Text(rcontent.text.clone());
-                    rcontents.push(rtext);
-                }
-                Thought {
-                    summary,
-                    // r#type,
-                    signature,
-                } => {
-                    if let Some(_summary) = summary {
-                        // the summary should not be part of thought
-                        // let rcontent = &summary[0];
-                        // let rtext = CompletionResponseContent::Thought(rcontent.text.clone());
-                        // rcontents.push(rtext);
-                    } else {
-                        let rtext = CompletionResponseContent::Thought(signature);
-                        rcontents.push(rtext);
-                    }
-                }
-                FunctionCall {
-                    id,
-                    arguments,
-                    name,
-                } => {
-                    let rcontent = CompletionResponseContent::ToolCall(ToolCallRequest {
-                        id,
-                        name,
-                        arguments,
-                    });
-                    rcontents.push(rcontent);
-                }
-            }
-        }
-
-        let cusage = gresponse.usage;
-        let usage = CompletionResponseTokenUsage {
-            input_tokens: cusage.total_input_tokens - cusage.total_cached_tokens,
-            cached_read_tokens: cusage.total_cached_tokens,
-            cached_write_tokens: 0,
-            tool_use_tokens: cusage.total_tool_use_tokens,
-            output_tokens: cusage.total_output_tokens, // Gemini already excludes thought tokens here
-            reasoning_tokens: cusage.total_thought_tokens,
-            total_tokens: (cusage.total_input_tokens - cusage.total_cached_tokens)  // fresh input
-        + cusage.total_cached_tokens                                         // cache reads
-        + cusage.total_tool_use_tokens                                       // tools
-        + cusage.total_output_tokens                                         // visible output
-        + cusage.total_thought_tokens, // reasoning
-        };
-
-        let cresponse = CompletionResponse {
-            id: agent_id.clone(),
-            model: gresponse.model,
-            response_id: id.unwrap_or_default(),
-            contents: rcontents,
-            usage,
-        };
-
-        Ok(cresponse)
-    }
 }
 
 #[async_trait]
 impl LlmClient for GeminiClient {
-    async fn complete(&self, request: CompletionRequest) -> HttpResult<CompletionResponse> {
-        self.complete_interactions(request).await
-    }
-
     async fn complete_with_stream(
         &self,
         request: CompletionRequest,
@@ -249,6 +132,7 @@ impl LlmClient for GeminiClient {
                                         agent_id.clone(),
                                             interaction.model,
                                             interaction.id,
+                                            String::new(),
                                             Some(total_usage),
                                         ))
                             }

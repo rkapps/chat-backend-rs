@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
         name: "Apify".to_string(),
         url: "https://mcp.apify.com".to_string(),
         api_key: apify_key,
+        auth_header_name: None,
     };
 
     let definitions = mcp_registry.register_server(setting.clone()).await?;
