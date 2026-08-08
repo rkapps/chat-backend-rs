@@ -35,8 +35,8 @@ pub(super) struct MCPToolCallResponse {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub(super) struct MCPToolCallResponseContent {
+pub struct MCPToolCallResponseContent {
     #[allow(dead_code)]
     r#type: String,
-    pub(super) text: String,
+    pub text: String,
 }

@@ -1,4 +1,4 @@
-use crate::client::rpc::JsonRpcRequest;
+use crate::{client::rpc::JsonRpcRequest, tools::response::MCPToolCallResponseContent};
 use anyhow::Result;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
@@ -29,7 +29,7 @@ pub trait MCPServerAdapter: Send + Sync + Debug {
     fn build_tool_call_request(&self, name: &str, params: Value) -> JsonRpcRequest;
 
     /// Parse a raw tool-call response body into a [`Value`] result.
-    fn parse_tool_call_response(&self, text: String) -> Value;
+    fn parse_tool_call_response(&self, text: Vec<MCPToolCallResponseContent>) -> Value;
 
     /// Build the `initialize` request sent at the start of an MCP session.
     fn build_initialize_request(&self) -> JsonRpcRequest;
@@ -44,3 +44,5 @@ pub trait MCPServerAdapter: Send + Sync + Debug {
     /// response header; this method abstracts over the specific header name.
     fn extract_session_id(&self, headers: &HeaderMap) -> Option<String>;
 }
+
+

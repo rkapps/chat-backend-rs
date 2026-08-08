@@ -14,7 +14,9 @@ use crate::{
     },
     tools::{
         request::{MCPToolCallParamsRequest, MCPToolGetParamsRequest, MCPToolListRequest},
-        response::{MCPToolCallResponse, MCPToolDefinition, MCPToolListResponse},
+        response::{
+            MCPToolCallResponse, MCPToolCallResponseContent, MCPToolDefinition, MCPToolListResponse,
+        },
     },
 };
 
@@ -117,7 +119,8 @@ impl MCPRegistry {
                 &mcp_get_definition.description.unwrap(),
                 mcp_get_definition.input_schema,
             );
-            self.definitions.insert(name.to_owned(), tool_definition.clone());
+            self.definitions
+                .insert(name.to_owned(), tool_definition.clone());
 
             Ok(tool_definition)
         } else {
@@ -312,11 +315,11 @@ impl MCPClient {
             )
             .await?;
 
-        debug!("Raw text from MCP: {:?}", response.result.content[0].text);
+        debug!("Raw text from MCP: {:?}", response.result.content);
 
         let value = self
             .server_adapter
-            .parse_tool_call_response(response.result.content[0].clone().text);
+            .parse_tool_call_response(response.result.content);
 
         Ok(value)
     }
@@ -338,8 +341,7 @@ impl MCPServerAdapter for StandardAdapter {
     }
 
     fn parse_tool_list_response(&self, text: String) -> Result<String> {
-        info!("parse_tool_list_response: {:?}", text);
-
+        // info!("parse_tool_list_response: {:?}", text);
         Ok(text)
     }
 
@@ -364,7 +366,19 @@ impl MCPServerAdapter for StandardAdapter {
         )
     }
 
-    fn parse_tool_call_response(&self, text: String) -> Value {
+    fn parse_tool_call_response(&self, contents: Vec<MCPToolCallResponseContent>) -> Value {
+        if contents.len() > 1 {
+            debug!(
+                blocks = contents.len(),
+                "MCP tool returned multiple content blocks; StandardAdapter is joining them — \
+                 consider a dedicated adapter for this server"
+            );
+        }
+        let text = contents
+            .iter()
+            .map(|b| b.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
         serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text))
     }
 
