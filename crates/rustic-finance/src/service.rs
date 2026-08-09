@@ -1,4 +1,6 @@
 use anyhow::Result;
+#[cfg(feature = "writer")]
+use chrono::{DateTime, Utc};
 use rustic_core::Tool;
 use rustic_ml::EmbeddingClient;
 use rustic_providers::finance::service::ProviderService;
@@ -75,9 +77,7 @@ impl FinanceService {
     #[cfg(feature = "reader")]
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
         use crate::tools::ticker_performance::TickerPerformanceTool;
-
         let reader = self.reader.as_ref().expect("reader not initialized");
-
         vec![
             Arc::new(TickerPeersTool::new(reader.clone())),
             Arc::new(TickerIndicatorTool::new(reader.clone())),
@@ -94,6 +94,28 @@ impl FinanceService {
             )),
             Arc::new(TickerPriceHistoryTool::new(reader.clone())),
         ]
+        
+    }
+
+    #[cfg(feature = "writer")]
+    pub async fn delete_ticker_indicators_before(&self, date: DateTime<Utc>) -> Result<()>{
+        use crate::storage::writer::TickerIndicatorStorageWriter;
+        let writer = self.writer.as_ref().expect("writer not initialized");
+        writer.delete_ticker_indicators_before(date).await
+    }
+
+    #[cfg(feature = "writer")]
+    pub async fn delete_ticker_embeddings_before(&self, date: DateTime<Utc>) -> Result<()> {
+        use crate::storage::writer::TickerEmbeddingStorageWriter;
+        let writer = self.writer.as_ref().expect("writer not initialized");
+        writer.delete_ticker_embeddings_before(date).await
+    }
+
+    #[cfg(feature = "writer")]
+    pub async fn delete_ticker_sentiments_before(&self, date: DateTime<Utc>) -> Result<()> {
+        use crate::storage::writer::TickerSentimentStorageWriter;
+        let writer = self.writer.as_ref().expect("writer not initialized");
+        writer.delete_ticker_sentiments_before(date).await
     }
 
     #[cfg(feature = "reader")]

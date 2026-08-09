@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use std::fmt::Debug;
 
 use async_trait::async_trait;
@@ -44,7 +45,7 @@ pub trait TickerHistoryStorageWriter: Send + Sync + Debug {
 #[async_trait]
 pub trait TickerIndicatorStorageWriter: Send + Sync + Debug {
     // async fn delete_ticker_indicators(&self, symbol: &str) -> Result<()>;
-    // async fn delete_ticker_indicators_before(&self, date: DateTime<Utc>) -> Result<()>;
+    async fn delete_ticker_indicators_before(&self, date: DateTime<Utc>) -> Result<()>;
     async fn save_ticker_indicators(
         &self,
         symbol: &str,
@@ -54,7 +55,7 @@ pub trait TickerIndicatorStorageWriter: Send + Sync + Debug {
 
 #[async_trait]
 pub trait TickerSentimentStorageWriter: Send + Sync + Debug {
-    // async fn delete_ticker_sentiments_before(&self, date: DateTime<Utc>) -> Result<()>;
+    async fn delete_ticker_sentiments_before(&self, date: DateTime<Utc>) -> Result<()>;
     async fn save_ticker_sentiments(
         &self,
         symbol: &str,
@@ -64,7 +65,7 @@ pub trait TickerSentimentStorageWriter: Send + Sync + Debug {
 
 #[async_trait]
 pub trait TickerEmbeddingStorageWriter: Send + Sync + Debug {
-    // async fn delete_ticker_embeddings_before(&self, date: DateTime<Utc>) -> Result<()>;
+    async fn delete_ticker_embeddings_before(&self, date: DateTime<Utc>) -> Result<()>;
     async fn save_ticker_embeddings(
         &self,
         symbol: &str,

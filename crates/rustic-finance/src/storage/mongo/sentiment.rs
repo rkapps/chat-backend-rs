@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use rustic_storage::core::{repository::Repository, search::SearchCriteria};
 
@@ -15,6 +16,7 @@ use crate::{
 
 #[async_trait]
 impl TickerSentimentStorageReader for FinanceMongoStorageReader {
+    
     async fn get_ticker_sentiments_by_ids(&self, ids: Vec<String>) -> Result<Vec<TickerSentiment>> {
         let criteria = SearchCriteria::new().in_values("id", ids);
         match self.manager.ticker_sentiments().await {
@@ -50,6 +52,22 @@ impl TickerSentimentStorageReader for FinanceMongoStorageReader {
 
 #[async_trait]
 impl TickerSentimentStorageWriter for FinanceMongoStorageWriter {
+
+    async fn delete_ticker_sentiments_before(&self, date: DateTime<Utc>) -> Result<()> {
+        let criteria = SearchCriteria::new().lt("date", date);
+        // criteria.add_condition("date", SearchOp::Lt, SearchValue::DateTime(date));
+
+        match self.manager.ticker_sentiments().await {
+            Ok(repo) => {
+                let mut repo = repo.lock().await;
+                repo.delete_many(Some(criteria)).await
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Error getting TickerSentiment: {}", e));
+            }
+        }
+    }
+
     async fn save_ticker_sentiments(
         &self,
         symbol: &str,

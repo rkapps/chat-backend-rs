@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use rustic_storage::core::{repository::Repository, search::SearchCriteria};
 
 use anyhow::Result;
@@ -30,6 +31,21 @@ impl TickerEmbeddingStorageReader for FinanceMongoStorageReader {
 
 #[async_trait]
 impl TickerEmbeddingStorageWriter for FinanceMongoStorageWriter {
+
+    async fn delete_ticker_embeddings_before(&self, date: DateTime<Utc>) -> Result<()> {
+        let criteria = SearchCriteria::new().lt("date", date);
+        match self.manager.ticker_embeddings().await {
+            Ok(repo) => {
+                let mut repo = repo.lock().await;
+                repo.delete_many(Some(criteria)).await
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Error getting TickerSentiment: {}", e));
+            }
+        }
+    }
+
+
     async fn save_ticker_embeddings(
         &self,
         symbol: &str,

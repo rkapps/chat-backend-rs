@@ -17,6 +17,7 @@ use crate::{
 
 #[async_trait]
 impl TickerIndicatorStorageReader for FinanceMongoStorageReader {
+
     async fn get_ticker_indicators(&self, symbol: &str) -> Result<Vec<TickerIndicator>> {
         let criteria = SearchCriteria::new()
             .eq("symbol", symbol.to_uppercase())
@@ -123,6 +124,22 @@ impl TickerIndicatorStorageReader for FinanceMongoStorageReader {
 
 #[async_trait]
 impl TickerIndicatorStorageWriter for FinanceMongoStorageWriter {
+
+    async fn delete_ticker_indicators_before(&self, date: DateTime<Utc>) -> Result<()> {
+        let criteria = SearchCriteria::new().lt("date", date);
+
+        match self.manager.ticker_indicators().await {
+            Ok(repo) => {
+                let mut repo = repo.lock().await;
+                repo.delete_many(Some(criteria)).await
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Error getting TickerSentiment: {}", e));
+            }
+        }
+    }
+
+
     async fn save_ticker_indicators(
         &self,
         symbol: &str,

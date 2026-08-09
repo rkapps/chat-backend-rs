@@ -1,5 +1,6 @@
 use anyhow::Result;
 use bin_shared::get_finance_writer_service;
+use chrono::Utc;
 use rustic_admin::finance::load_tickers;
 use rustic_boot::schema::update_rustic_platform;
 use rustic_core::set_logger;
@@ -24,6 +25,9 @@ enum AdminCommands {
         #[arg(short, long)]
         file: PathBuf,
     },
+    PruneIndicators, // keep last 5 years
+    PruneSentiments, // keep last 30 days
+    PruneEmbeddings, // keep last 30 days
     UpdateEconomicSchema,
     UpdateFinanceSchema,
     UpdatePlatformSchema,
@@ -62,6 +66,49 @@ async fn main() -> Result<()> {
             load_tickers(&mongo_uri, file).await?;
             info!("Load Tickers PipeLine done.");
         }
+        AdminCommands::PruneEmbeddings => {
+
+            let service = get_finance_writer_service(&mongo_uri).await?;
+            info!("Pruning embeddings older than 30 days...");
+            let cutoff = Utc::now() - chrono::Duration::days(30);
+
+            match service.delete_ticker_embeddings_before(cutoff)
+                .await
+            {
+                Ok(_) => info!("Prune embeddings complete"),
+                Err(e) => error!("Prune embeddings failed: {:?}", e),
+            }
+        }
+
+        AdminCommands::PruneIndicators => {
+            let service = get_finance_writer_service(&mongo_uri).await?;
+            info!("Pruning indicators older than 5 years...");
+            let cutoff = Utc::now() - chrono::Duration::days(365 * 5);
+
+            match service
+                .delete_ticker_indicators_before(cutoff)
+                .await
+            {
+                Ok(_) => info!("Prune indicators complete"),
+                Err(e) => error!("Prune indicators failed: {:?}", e),
+            }
+        }
+
+        AdminCommands::PruneSentiments => {
+            let service = get_finance_writer_service(&mongo_uri).await?;
+            info!("Pruning sentiments older than 30 days...");
+            let cutoff = Utc::now() - chrono::Duration::days(30);
+
+            match service
+                .delete_ticker_sentiments_before(cutoff)
+                .await
+            {
+                Ok(_) => info!("Prune sentiments complete"),
+                Err(e) => error!("Prune sentiments failed: {:?}", e),
+            }
+        }
+
+
         AdminCommands::UpdateEconomicSchema => {
             update_economic_db(&mongo_uri, &rustic_economic_mongo_db).await?;
         }
