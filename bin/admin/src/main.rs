@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // uri is the same for all
-    let mongo_uri = env::var("MONGO_URI").expect("MONGO_URI envrionment variable not set");
+    let mongo_uri = env::var("RUSTIC_FINANCE_MONGO_URI").expect("MONGO_URI envrionment variable not set");
     info!("Mongo uri: {}", mongo_uri);
 
     let rustic_platform_mongo_db = env::var("RUSTIC_PLATFORM_DB_NAME")
