@@ -53,7 +53,6 @@ impl TurnChunkResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-
 pub struct TurnResponse {
     pub agent_id: String,
     pub prompt: String,
@@ -76,17 +75,16 @@ impl TurnResponse {
         }
     }
     pub fn for_deterministic(
-        prompt: String,
-        orchestrator_response: AgentResponse, // the LLM goal-setting call
+        prompt: &str,
+        agent_id: &str,
     ) -> Self {
         Self {
-            agent_id: orchestrator_response.agent_id.clone(),
-            prompt,
+            agent_id: agent_id.to_string(),
+            prompt: prompt.to_string(),
             content: String::new(),
             response_id: None,
-            usage: orchestrator_response.usage.clone(),
+            usage: TokenUsage::default(),
             execution: TurnExecution::Deterministic {
-                orchestrator: orchestrator_response, // what the LLM decided (goals)
                 stages: Vec::new(),
                 synthesizer: None, // what actually ran (from config)
             },
@@ -144,13 +142,11 @@ impl TurnResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-
 pub enum TurnExecution {
     SingleAgent {
         response: AgentResponse,
     },
     Deterministic {
-        orchestrator: AgentResponse, // LLM goal-setting — always iteration 0
         stages: Vec<StageResponse>,
         synthesizer: Option<Box<TurnResponse>>, // ← Box for recursion
     },
@@ -159,15 +155,16 @@ pub enum TurnExecution {
         synthesizer: Option<Box<TurnResponse>>, // ← Box for recursion
     },
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StageResponse {
     pub name: String,
     pub responses: Vec<TurnResponse>,
     pub duration_ms: u64,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionResponse {
     pub iteration: u32,
     pub decision: StageDecision,
@@ -260,12 +257,10 @@ impl TurnResponse {
                 "agent": agent_json(response),
             }),
             TurnExecution::Deterministic {
-                orchestrator,
                 stages,
                 synthesizer,
             } => serde_json::json!({
                 "type": "deterministic",
-                "orchestrator": agent_json(orchestrator),
                 "stages": stages.iter().map(|s| serde_json::json!({
                     "name": s.name,
                     "duration_ms": s.duration_ms,

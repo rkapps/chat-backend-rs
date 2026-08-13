@@ -431,23 +431,10 @@ impl PipeLineAgent {
             async move {
                 let (_, last_response_id) = build_messages_from_turns(&turns);
 
-                let (response, decision) = match self_clone
-                    .execute_decide_streaming(
-                        &turns,
-                        &original_prompt.clone(),
-                        last_response_id.clone(),
-                        store,
-                        &tx,
-                    )
-                    .await
-                {
-                    Some(c) => c,
-                    None => return,
-                };
-
-                let mut turn_response =
-                    TurnResponse::for_deterministic(original_prompt.clone(), response);
-                // turn_response.decision = Some(decision.clone());
+                let mut turn_response = TurnResponse::for_deterministic(
+                    &original_prompt.clone(),
+                    self_clone.get_agent_id(),
+                );
 
                 let mut new_content = original_prompt.clone();
                 let length = self_clone.stages.len();
@@ -458,27 +445,30 @@ impl PipeLineAgent {
                         ExecutionMode::Sequential
                     };
 
-                    let new_decision = if index == 0 {
-                        decision.clone()
+                    let goal_text = if index == 0 {
+                        original_prompt.clone()
                     } else {
-                        let sub_agents = stage
-                            .sub_agents
-                            .iter()
-                            .map(|s| AgentGoal {
-                                id: s.id.clone(),
-                                goal: Some(format!(
-                                    "{}\n\nFiscal Context from previous stage:\n{}",
-                                    original_prompt, new_content
-                                )),
-                            })
-                            .collect();
+                        let gtext = format!(
+                            "{}\n\nFiscal Context from previous stage:\n{}",
+                            original_prompt, new_content
+                        );
+                        gtext
+                    };
 
-                        StageDecision {
-                            agents: sub_agents,
-                            execution,
-                            stop: false,
-                            reasoning: None,
-                        }
+                    let sub_agents = stage
+                        .sub_agents
+                        .iter()
+                        .map(|s| AgentGoal {
+                            id: s.id.clone(),
+                            goal: Some(goal_text.clone()),
+                        })
+                        .collect();
+
+                    let new_decision = StageDecision {
+                        agents: sub_agents,
+                        execution,
+                        stop: false,
+                        reasoning: None,
                     };
 
                     info!(
