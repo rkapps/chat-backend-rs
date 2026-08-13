@@ -33,9 +33,9 @@ pub struct AgentConfig {
     pub tools: Vec<String>,
     #[serde(default)]
     pub mcp_tools: Vec<String>,
-    // pub model_assignment: ModelAssignment,
     /// Conversation strategy overrides; `None` uses the server default.
-    pub conversation: ConversationConfig,
+    #[serde(default)]
+    pub conversation: Option<ConversationConfig>,
     /// Pipeline-specific settings; `None` for `SingleAgent` execution types.
     pub pipeline: Option<PipelineConfig>,
     #[serde(default)]
@@ -46,10 +46,17 @@ pub struct AgentConfig {
 
 impl AgentConfig {
     pub fn get_strategy(&self) -> CompletionStrategy {
-        self.conversation.default_strategy.clone()
+        self.conversation
+            .as_ref()
+            .map(|c| c.default_strategy.clone())
+            .unwrap_or_default()   // requires CompletionStrategy: Default
     }
+
     pub fn get_history_mode(&self) -> HistoryMode {
-        self.conversation.history_mode.clone().unwrap_or(Full)
+        self.conversation
+            .as_ref()
+            .and_then(|c| c.history_mode.clone())
+            .unwrap_or(HistoryMode::Full)
     }
 }
 
