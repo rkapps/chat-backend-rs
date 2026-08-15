@@ -47,9 +47,16 @@ async fn main() -> Result<()> {
     set_logger(filter);
     let cli = Cli::parse();
 
-    // uri is the same for all
-    let mongo_uri = env::var("RUSTIC_FINANCE_MONGO_URI").expect("MONGO_URI envrionment variable not set");
-    info!("Mongo uri: {}", mongo_uri);
+
+    // RUSTIC_CORE_MONGO_URI
+    // Used for rustic_fiance and rustic_economic
+    let rustic_core_mongo_uri = env::var("RUSTIC_CORE_MONGO_URI").expect("RUSTIC_CORE_MONGO_URI envrionment variable not set");
+    info!("Rustic Core Mongo uri: {:?}", rustic_core_mongo_uri);
+
+      // RUSTIC_CLIENT_MONGO_URI
+    // Used for rustic_platform and client specific data
+    let rustic_client_mongo_uri = env::var("RUSTIC_CLIENT_MONGO_URI").expect("RUSTIC_CLIENT_MONGO_URI envrionment variable not set");
+    info!("Rustic Client Mongo uri: {:?}", rustic_client_mongo_uri);
 
     let rustic_platform_mongo_db = env::var("RUSTIC_PLATFORM_DB_NAME")
         .expect("RUSTIC_PLATFORM_DB_NAME envrionment variable not set");
@@ -63,12 +70,12 @@ async fn main() -> Result<()> {
         AdminCommands::CheckEnv => {}
         AdminCommands::LoadTickers { file } => {
             info!("Load Tickers PipeLine started...");
-            load_tickers(&mongo_uri, file).await?;
+            load_tickers(&rustic_core_mongo_uri, file).await?;
             info!("Load Tickers PipeLine done.");
         }
         AdminCommands::PruneEmbeddings => {
 
-            let service = get_finance_writer_service(&mongo_uri).await?;
+            let service = get_finance_writer_service(&rustic_core_mongo_uri).await?;
             info!("Pruning embeddings older than 30 days...");
             let cutoff = Utc::now() - chrono::Duration::days(30);
 
@@ -81,7 +88,7 @@ async fn main() -> Result<()> {
         }
 
         AdminCommands::PruneIndicators => {
-            let service = get_finance_writer_service(&mongo_uri).await?;
+            let service = get_finance_writer_service(&rustic_core_mongo_uri).await?;
             info!("Pruning indicators older than 5 years...");
             let cutoff = Utc::now() - chrono::Duration::days(365 * 5);
 
@@ -95,7 +102,7 @@ async fn main() -> Result<()> {
         }
 
         AdminCommands::PruneSentiments => {
-            let service = get_finance_writer_service(&mongo_uri).await?;
+            let service = get_finance_writer_service(&rustic_core_mongo_uri).await?;
             info!("Pruning sentiments older than 30 days...");
             let cutoff = Utc::now() - chrono::Duration::days(30);
 
@@ -110,20 +117,20 @@ async fn main() -> Result<()> {
 
 
         AdminCommands::UpdateEconomicSchema => {
-            update_economic_db(&mongo_uri, &rustic_economic_mongo_db).await?;
+            update_economic_db(&rustic_core_mongo_uri, &rustic_economic_mongo_db).await?;
         }
         AdminCommands::UpdateFinanceSchema => {
-            update_finance_db(&mongo_uri, &rustic_finance_mongo_db).await?;
+            update_finance_db(&rustic_core_mongo_uri, &rustic_finance_mongo_db).await?;
         }
         AdminCommands::UpdatePlatformSchema => {
-            update_rustic_platform(&mongo_uri, &rustic_platform_mongo_db).await?;
+            update_rustic_platform(&rustic_client_mongo_uri, &rustic_platform_mongo_db).await?;
         }
         AdminCommands::UpdateTickersEOD { symbols, update } => {
             let symbols_str = symbols.as_deref().unwrap_or("");
             let update = update.is_none();
             info!("Tickers EOD PipeLine started...");
 
-            let service = get_finance_writer_service(&mongo_uri).await?;
+            let service = get_finance_writer_service(&rustic_core_mongo_uri).await?;
             match service.update_eod_tickers(symbols_str, update).await {
                 Ok(_) => info!("Tickers EOD update completed successfully."),
                 Err(e) => error!("Tickers EOD update failed: {:?}", e),

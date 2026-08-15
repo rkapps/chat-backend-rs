@@ -29,19 +29,23 @@ async fn main() -> Result<()> {
     let config_dir = env::var("RUSTIC_AI_CONFIG_PATH")
         .expect("RUSTIC_AI_CONFIG_PATH envrionment variable not set");
 
-    let mongo_uri = env::var("MONGO_URI").expect("MONGO_URI envrionment variable not set");
 
     // define tools array
     let mut tools: Vec<Arc<dyn Tool>> = vec![];
 
+    // RUSTIC_CORE_MONGO_URI
+    // Used for rustic_fiance and rustic_economic
+    let rustic_core_mongo_uri = env::var("RUSTIC_CORE_MONGO_URI").expect("RUSTIC_CORE_MONGO_URI envrionment variable not set");
+    info!("Rustic Core Mongo uri: {:?}", rustic_core_mongo_uri);
+
     // finance reader service
-    let finance_reader_service = get_finance_reader_service(&mongo_uri).await?;
+    let finance_reader_service = get_finance_reader_service(&rustic_core_mongo_uri).await?;
     tools.extend(finance_reader_service.tools());
 
     match env::var("RUSTIC_AI_ECONOMIC_CONFIG_USAGE_FILE") {
         Ok(c) => {
             // economic reader service
-            let economic_service = get_economic_reader_service(&mongo_uri, &config_dir, &c).await?;
+            let economic_service = get_economic_reader_service(&rustic_core_mongo_uri, &config_dir, &c).await?;
             tools.extend(economic_service.tools());
         }
         Err(_) => {
@@ -49,11 +53,16 @@ async fn main() -> Result<()> {
         }
     };
 
-    let mongo_db = env::var("RUSTIC_PLATFORM_DB_NAME")
+    // RUSTIC_CLIENT_MONGO_URI
+    // Used for rustic_platform and client specific data
+    let rustic_client_mongo_uri = env::var("RUSTIC_CLIENT_MONGO_URI").expect("RUSTIC_CLIENT_MONGO_URI envrionment variable not set");
+    info!("Rustic Client Mongo uri: {:?}", rustic_client_mongo_uri);
+
+    let rustic_platform_mongo_db = env::var("RUSTIC_PLATFORM_DB_NAME")
         .expect("RUSTIC_AI_DB_NAME envrionment variable not set");
     info!(
         "Platform Data Mongo uri: {:?} db: {:?}",
-        mongo_uri, mongo_db
+        rustic_client_mongo_uri, rustic_platform_mongo_db
     );
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
@@ -74,7 +83,7 @@ async fn main() -> Result<()> {
         .providers("providers.json".to_string())
         .agents_config("agents.json".to_string())
         .mcp_config("mcp_servers_config.json".to_string())
-        .mongo_database(mongo_uri, mongo_db)
+        .mongo_database(rustic_client_mongo_uri, rustic_platform_mongo_db)
         .cors_origins(origins.to_vec())
         .tools(tools)
         .serve(
