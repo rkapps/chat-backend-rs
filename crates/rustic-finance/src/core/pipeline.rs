@@ -46,6 +46,7 @@ pub async fn load_tickers(
     }
 
     update_all_tickers(
+        reader.clone(),
         writer.clone(),
         provider_service,
         all_new_controls,
@@ -71,6 +72,7 @@ pub async fn update_eod_tickers_pipeline(
     let all_tickers = get_tickers_for_symbols(&reader, symbols).await?;
     let all_controls = reader.get_ticker_controls().await?;
     update_all_tickers(
+        reader.clone(),
         writer.clone(),
         provider_service,
         all_controls,

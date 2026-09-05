@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{Months, Utc};
+use chrono::{Months, TimeZone, Utc};
 use chrono_tz::US::Eastern;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal_macros::dec;
@@ -15,29 +15,24 @@ use crate::{
         BASE_CURRENCY,
         indicators::IndicatorCalculator,
         sync::{
-            should_sync_embeddings, should_sync_history, should_sync_indicators,
+            should_sync_embeddings, should_sync_indicators,
             should_sync_sentiments,
         },
-    },
-    domain::{
+    }, domain::{
         Ticker, TickerControl, TickerEmbedding, TickerHistory, TickerIndicator, TickerSentiment,
         tickers::{AssetType, TICKER_PERFORMANCE_PERIODS},
-    },
-    storage::{
-        FinanceMongoStorageReader,
-        mongo::writer::FinanceMongoStorageWriter,
-        reader::TickerSentimentStorageReader,
-        writer::{
+    }, storage::{
+        FinanceMongoStorageReader, mongo::writer::FinanceMongoStorageWriter, reader::{TickerHistoryStorageReader, TickerSentimentStorageReader}, writer::{
             TickerControlStorageWriter, TickerEmbeddingStorageWriter, TickerHistoryStorageWriter,
             TickerIndicatorStorageWriter, TickerSentimentStorageWriter, TickerStorageWriter,
         },
-    },
-    util::data_utils::{
+    }, util::data_utils::{
         assets_cap_label, calculate_performance, get_period_close, get_period_start,
     },
 };
 
 pub async fn update_all_tickers(
+    reader: Arc<FinanceMongoStorageReader>,
     writer: Arc<FinanceMongoStorageWriter>,
     provider_service: Arc<ProviderService>,
     all_controls: Vec<TickerControl>,
@@ -69,6 +64,7 @@ pub async fn update_all_tickers(
             };
 
             let sem = semaphore.clone();
+            let reader = reader.clone();
             let writer = writer.clone();
             let provider_service = provider_service.clone();
 
@@ -82,7 +78,7 @@ pub async fn update_all_tickers(
                 }
 
                 let result =
-                    update_ticker(writer, provider_service, &mut tc, &mut ticker, update).await;
+                    update_ticker(reader, writer, provider_service, &mut tc, &mut ticker, update).await;
 
                 sleep(delay).await;
 
@@ -130,6 +126,7 @@ pub async fn update_all_tickers(
 }
 
 pub async fn update_ticker(
+    reader: Arc<FinanceMongoStorageReader>,
     writer: Arc<FinanceMongoStorageWriter>,
     provider_service: Arc<ProviderService>,
     tc: &mut TickerControl,
@@ -150,7 +147,7 @@ pub async fn update_ticker(
 
     // update history
     // if !update ||  {
-    match update_ticker_history(provider_service.clone(), tc, ticker).await {
+    match update_ticker_history(reader.clone(), provider_service.clone(), ticker).await {
         Ok((all_histories, new_histories)) => {
             if !new_histories.is_empty() {
                 info!(
@@ -158,7 +155,7 @@ pub async fn update_ticker(
                     ticker.symbol,
                     new_histories.len()
                 );
-                if update && should_sync_history(tc) {
+                if update {
                     tc.last_history_sync_at = Some(Utc::now());
                     writer.save_ticker_control(tc.clone()).await?;
                     writer
@@ -240,15 +237,21 @@ pub(crate) async fn update_ticker_details(
 }
 
 pub(crate) async fn update_ticker_history(
+    reader: Arc<FinanceMongoStorageReader>,
     provider_service: Arc<ProviderService>,
-    tc: &mut TickerControl,
     ticker: &mut Ticker,
 ) -> Result<(Vec<TickerHistory>, Vec<TickerHistory>)> {
-    let Some(hist_start_date) = Utc::now().checked_sub_months(Months::new(60)) else {
-        return Err(anyhow::anyhow!("Error calcuating start date"));
+    // let ome(hist_start_date) = Utc.with_ymd_and_hms(2010, 11, 23, 14, 30, 0) else {
+    //     return Err(anyhow::anyhow!("Error calcuating start date"));
+    // };
+    let old_histories = match reader.get_ticker_history(&ticker.symbol).await{
+        Ok(c) => c,
+        Err(_) => Vec::new(),
     };
 
-    let histories = match ticker.asset_type {
+    let hist_start_date = Utc.with_ymd_and_hms(2010, 1, 1, 0, 0, 0).unwrap();
+
+    let mut histories = match ticker.asset_type {
         AssetType::Stock => {
             let thist = provider_service
                 .get_stock_history(&ticker.symbol, &hist_start_date)
@@ -280,31 +283,37 @@ pub(crate) async fn update_ticker_history(
         }
     };
 
-    let mut new_histories = Vec::new();
-    if !histories.is_empty() {
-        new_histories = match tc.last_history_sync_at {
-            Some(last_sync) => {
-                let last_sync_date = last_sync.with_timezone(&Eastern).date_naive();
-                histories
-                    .iter()
-                    .filter(|h| h.date.with_timezone(&Eastern).date_naive() > last_sync_date)
-                    .cloned()
-                    .collect()
-            }
-            None => {
-                // First sync - insert all
-                histories.clone()
-            }
-        };
-    }
+    // remove duplicates
+    histories.dedup_by_key(|h|h.date);
+
+    // Build the set of dates we ALREADY have, rather than trusting last_sync_at.
+    // This is what actually finds gaps — a bookmark only tells you when the job
+    // last ran, not which specific days succeeded.
+    let existing_dates: std::collections::HashSet<chrono::NaiveDate> = old_histories
+        .iter()
+        .map(|h| h.date.with_timezone(&Eastern).date_naive())
+        .collect();
+
+    let new_histories: Vec<TickerHistory> = histories
+        .iter()
+        .filter(|h| !existing_dates.contains(&h.date.with_timezone(&Eastern).date_naive()))
+        .cloned()
+        .collect();
+
+
     debug!(
-        "Ticker {} New History updates: {}",
+        "Ticker {} New History updates: {} (existing: {}, fetched: {})",
         ticker.symbol,
-        new_histories.len()
+        new_histories.len(),
+        existing_dates.len(),
+        histories.len(),
     );
+
 
     Ok((histories, new_histories))
 }
+
+
 
 pub(crate) async fn update_ticker_price_history(
     _tc: &mut TickerControl,
@@ -726,7 +735,7 @@ pub async fn update_ticker_overview_embedding(
 
     match embedding_client.embed_text(&overview_text).await {
         Ok(embedding) => {
-            ticker.overview_text = Some(overview_text);
+            ticker.overview_text = Some(overview_text.to_string());
             ticker.overview_embedding = Some(embedding.into_vec());
         }
         Err(e) => error!("Embedding failed for {}: {}", ticker.symbol, e),
